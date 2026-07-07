@@ -1,0 +1,166 @@
+# Rally: Large-Group Video Calls
+
+Rally is a video calling web app for large groups — up to 50 people per room, with an architecture that scales past 100. Instead of a peer-to-peer mesh (where every participant uploads a copy of their stream to everyone else), Rally uses an **SFU (Selective Forwarding Unit)**: each participant uploads **one** stream to a media server that forwards it to the rest of the room. Upload bandwidth stays constant no matter how many people join.
+
+> Share a link and join instantly. Built for the whole room, not just a handful.
+
+Rally is the large-room sibling to [**Pact**](https://github.com/AbhijeetP21/Pact), a privacy-first peer-to-peer app for ≤5 people. Rally reuses Pact's shell — auth, rooms, design system, and on-device media processing — and swaps the mesh engine for a LiveKit SFU. That trade buys scale at the cost of pure P2P privacy: **media is relayed through (and decrypted at) the SFU.** The UI is honest about that.
+
+## Principles
+
+- **SFU, not mesh.** One upstream per participant; the server fans it out. Upload is O(1), not O(N).
+- **Honest about the relay.** Media flows through the SFU — Rally says so rather than implying end-to-end privacy.
+- **Supabase for auth and room metadata only.** A server route mints short-lived LiveKit tokens after verifying auth and room membership.
+- **On-device processing.** Noise suppression and background blur run in the browser; the *processed* tracks are what get published.
+
+## Features
+
+- Google OAuth and magic-link sign-in (Supabase)
+- Create a room, share a link, join instantly
+- Pre-join lobby with camera and mic preview, plus noise and blur toggles
+- Responsive participant grid with per-tile speaking indicators and connection status
+- Mic, camera, screen share, and leave controls
+- Live mic and camera state across the room, so you can see when someone mutes
+- Session chat over LiveKit data channels — lives only for the call, disappears when it ends
+- On-device background blur (MediaPipe selfie segmentation)
+- On-device RNNoise suppression, optional and off by default
+- Dynacast so the publisher pauses simulcast layers no one is watching (adaptive stream + pagination land in the scale phase)
+
+A note on noise suppression: the browser's native suppression is light and always on. RNNoise is a heavier ML pass that can strain a slower machine and introduce robotic artifacts for the people listening, so it stays off by default and is there if you want it.
+
+## Tech Stack
+
+| | |
+|---|---|
+| Framework | Next.js 15 (App Router, TypeScript strict) |
+| UI | React 19, Tailwind CSS v4, shadcn/ui (Base UI), lucide-react |
+| SFU | LiveKit — `livekit-client` (browser) + `livekit-server-sdk` (token minting) |
+| Noise suppression | `@sapphi-red/web-noise-suppressor` (RNNoise WASM AudioWorklet) |
+| Background blur | `@mediapipe/selfie_segmentation` (self-hosted WASM) |
+| Backend | Supabase: Auth, PostgreSQL with RLS (rooms) |
+| Deploy | Vercel + LiveKit Cloud |
+
+## Architecture
+
+```
+   Browser A ──publish──▶ ┌───────────────┐ ──forward──▶ Browser B, C, D...
+   Browser B ──publish──▶ │  LiveKit SFU  │ ──forward──▶ Browser A, C, D...
+   Browser C ──publish──▶ │ (media server)│ ──forward──▶ ...
+                          └───────────────┘
+   Each client uploads ONE stream. The SFU fans it out.
+
+   Supabase = auth + room metadata only.
+   /api/livekit-token mints a short-lived token after verifying auth + room.
+```
+
+- **LiveKit** handles signaling, ICE, TURN, and selective forwarding — no `simple-peer`, no manual ICE, no self-run TURN.
+- **The token route** (`/api/livekit-token`) is auth-gated. It verifies the room is real, active, and unexpired, then mints a token scoped to that room. The API key and secret are server-only and never reach the client bundle.
+- **Local media is processed on-device** (RNNoise + blur) and the processed tracks are published to the SFU via `room.localParticipant.publishTrack`.
+- **Chat rides LiveKit data channels** (`publishData` with a `chat` topic) and is never persisted.
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 20+ and npm
+- A [Supabase](https://supabase.com) project (free tier)
+- A [LiveKit Cloud](https://cloud.livekit.io) project (free "Build" tier)
+
+### 1. Install
+
+```bash
+npm install
+```
+
+### 2. Configure environment
+
+Copy the example and fill in your values:
+
+```bash
+cp .env.local.example .env.local
+```
+
+| Variable | Required | Description |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | yes | Supabase project URL (Project Settings, API) |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | yes | Supabase publishable key (`sb_publishable_...`). The legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` also works. |
+| `NEXT_PUBLIC_LIVEKIT_URL` | yes | LiveKit Cloud URL, e.g. `wss://your-project.livekit.cloud` |
+| `LIVEKIT_API_KEY` | yes | LiveKit API key (server-only) |
+| `LIVEKIT_API_SECRET` | yes | LiveKit API secret (server-only) |
+| `NEXT_PUBLIC_APP_URL` | yes | Base URL, e.g. `http://localhost:3000` |
+| `SUPABASE_SERVICE_ROLE_KEY` | no | Server-only. Unused in v1. |
+
+The app validates required variables on startup and throws a descriptive error if any are missing.
+
+### 3. Set up Supabase
+
+1. **Run the migrations.** In the Supabase SQL Editor, run [`supabase/migrations/20240001_initial.sql`](supabase/migrations/20240001_initial.sql) (creates the `rooms` table + RLS), then [`supabase/migrations/20240002_large_rooms.sql`](supabase/migrations/20240002_large_rooms.sql) (raises the participant cap to 50, ceiling 100).
+2. **Auth, URL Configuration.** Set Site URL to `http://localhost:3000` and add `http://localhost:3000/**` to Redirect URLs.
+3. **Magic link** works out of the box. For **Google OAuth** (optional), create a Google Cloud OAuth client with redirect `https://<project-ref>.supabase.co/auth/v1/callback`, then enable Google under Auth, Providers.
+
+### 4. Set up LiveKit Cloud
+
+1. Create a project at [cloud.livekit.io](https://cloud.livekit.io) (free tier).
+2. From project settings, copy the **URL**, **API Key**, and **API Secret** into `.env.local`. The URL is public; the key and secret are server-only.
+
+### 5. Run
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+> Testing two participants on one machine? Use two different browsers, or launch a second Chrome with a fake camera so both have video:
+> ```
+> chrome --user-data-dir=/tmp/rally-test --use-fake-device-for-media-stream --use-fake-ui-for-media-stream http://localhost:3000
+> ```
+
+## Scripts
+
+```bash
+npm run dev         # dev server
+npm run build       # production build
+npm run start       # serve the production build
+npm run lint        # ESLint
+npm run typecheck   # tsc --noEmit
+```
+
+## Deploy to Vercel
+
+1. Push to GitHub and import the repo in Vercel.
+2. Add every environment variable from `.env.local` to the Vercel project. Set `NEXT_PUBLIC_APP_URL` to your production URL.
+3. In Supabase Auth, URL Configuration, add your production URL and `https://<your-domain>/**` to the redirect allow-list.
+4. Deploy, then run a full multi-device call to verify.
+
+## Project Structure
+
+```
+app/
+  (auth)/login, (auth)/auth/callback   Auth UI and OAuth/magic-link callback
+  room/new, room/[slug]                Create and join rooms
+  api/livekit-token                    Server-side LiveKit token minting (auth-gated)
+components/call/                        VideoTile, ParticipantGrid, ControlBar, ChatPanel, ...
+lib/webrtc/                             MediaManager, NoiseSuppressor, BackgroundProcessor
+hooks/                                  useCall (LiveKit), useMedia, useParticipants, useAudioLevel
+lib/supabase/                           Browser and server clients (@supabase/ssr)
+middleware.ts                          Protects /room/* routes
+supabase/migrations/                   rooms table, RLS, and large-room cap
+public/noise/                          RNNoise worklet and WASM
+public/mediapipe/                      Selfie segmentation model and WASM
+```
+
+## Security
+
+- The token route is auth-gated and verifies room membership before minting.
+- `LIVEKIT_API_SECRET` is server-only and never enters the client bundle.
+- All DB access goes through the authenticated Supabase client; RLS enforces room access.
+- Room slugs are `nanoid`-generated, so they are non-guessable and non-sequential.
+- Middleware protects all `/room/*` routes.
+- The UI is honest that media is server-relayed, not peer-to-peer private.
+- Chat is ephemeral — never written to a database, gone when the call ends.
+- Display names are trimmed and length-capped.
+
+## License
+
+MIT
