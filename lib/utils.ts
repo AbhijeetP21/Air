@@ -43,7 +43,7 @@ export function isLikelyMobile(): boolean {
   return window.matchMedia('(pointer: coarse) and (max-width: 1024px)').matches
 }
 
-/** Whether the browser supports the WebRTC + getUserMedia APIs Rally needs. */
+/** Whether the browser supports the WebRTC + getUserMedia APIs Air needs. */
 export function isWebRTCSupported(): boolean {
   return (
     typeof window !== 'undefined' &&

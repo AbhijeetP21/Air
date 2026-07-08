@@ -1,4 +1,4 @@
-// Shared application types for Rally.
+// Shared application types for Air.
 
 export interface Room {
   id: string

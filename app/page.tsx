@@ -31,7 +31,7 @@ export default async function Home() {
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-5">
         <span className="flex items-center gap-2 text-lg font-semibold tracking-tight">
           <span className="inline-block size-2.5 rounded-full bg-primary" />
-          Rally
+          Air
         </span>
         {account ? (
           <div className="flex items-center gap-2">
@@ -97,7 +97,7 @@ export default async function Home() {
       </main>
 
       <footer className="mx-auto w-full max-w-5xl px-6 py-8 text-center text-xs text-muted-foreground">
-        Rally. Large-group video over a LiveKit SFU.
+        Air — Active Interaction Rooms. Large-group video over a LiveKit SFU.
       </footer>
     </div>
   )

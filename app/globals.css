@@ -60,7 +60,7 @@
   --ring: oklch(0.606 0.25 292.717);
 }
 
-/* Rally dark theme — zinc surfaces, violet accent. */
+/* Air dark theme — zinc surfaces, violet accent. */
 .dark {
   --background: oklch(0.141 0.005 285.823); /* zinc-950 */
   --foreground: oklch(0.985 0 0);

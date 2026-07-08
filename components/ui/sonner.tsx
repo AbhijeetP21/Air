@@ -3,7 +3,7 @@
 import { Toaster as Sonner, type ToasterProps } from 'sonner'
 
 /**
- * App-wide toast surface. Rally is dark-only, so the theme is fixed rather than
+ * App-wide toast surface. Air is dark-only, so the theme is fixed rather than
  * derived from system preference.
  */
 function Toaster(props: ToasterProps) {

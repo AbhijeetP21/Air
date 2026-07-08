@@ -12,7 +12,7 @@ export default function GlobalError({
   reset: () => void
 }) {
   useEffect(() => {
-    console.error('[Rally] unhandled error:', error)
+    console.error('[Air] unhandled error:', error)
   }, [error])
 
   return (

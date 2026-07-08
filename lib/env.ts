@@ -66,7 +66,7 @@ export function validateEnv(): void {
   if (missing.length > 0) {
     const lines = missing.map((m) => `  - ${m.key}: ${m.hint}`).join('\n')
     throw new Error(
-      `[Rally] Missing required environment variable(s):\n${lines}\n` +
+      `[Air] Missing required environment variable(s):\n${lines}\n` +
         `Add them to .env.local (see .env.local.example) and restart.`,
     )
   }

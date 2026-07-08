@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 /**
- * Accepts either a full Rally room URL or a bare slug, extracts the slug, and
+ * Accepts either a full Air room URL or a bare slug, extracts the slug, and
  * navigates to the room. Route protection (middleware) handles auth.
  */
 function extractSlug(raw: string): string | null {

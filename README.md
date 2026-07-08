@@ -1,15 +1,15 @@
-# Rally: Large-Group Video Calls
+# Air — Active Interaction Rooms
 
-Rally is a video calling web app for large groups — up to 50 people per room, with an architecture that scales past 100. Instead of a peer-to-peer mesh (where every participant uploads a copy of their stream to everyone else), Rally uses an **SFU (Selective Forwarding Unit)**: each participant uploads **one** stream to a media server that forwards it to the rest of the room. Upload bandwidth stays constant no matter how many people join.
+Air (Active Interaction Rooms) is a video calling web app for large groups — up to 50 people per room, with an architecture that scales past 100. Instead of a peer-to-peer mesh (where every participant uploads a copy of their stream to everyone else), Air uses an **SFU (Selective Forwarding Unit)**: each participant uploads **one** stream to a media server that forwards it to the rest of the room. Upload bandwidth stays constant no matter how many people join.
 
 > Share a link and join instantly. Built for the whole room, not just a handful.
 
-Rally is the large-room sibling to [**Pact**](https://github.com/AbhijeetP21/Pact), a privacy-first peer-to-peer app for ≤5 people. Rally reuses Pact's shell — auth, rooms, design system, and on-device media processing — and swaps the mesh engine for a LiveKit SFU. That trade buys scale at the cost of pure P2P privacy: **media is relayed through (and decrypted at) the SFU.** The UI is honest about that.
+Air is the large-room sibling to [**Pact**](https://github.com/AbhijeetP21/Pact), a privacy-first peer-to-peer app for ≤5 people. Air reuses Pact's shell — auth, rooms, design system, and on-device media processing — and swaps the mesh engine for a LiveKit SFU. That trade buys scale at the cost of pure P2P privacy: **media is relayed through (and decrypted at) the SFU.** The UI is honest about that.
 
 ## Principles
 
 - **SFU, not mesh.** One upstream per participant; the server fans it out. Upload is O(1), not O(N).
-- **Honest about the relay.** Media flows through the SFU — Rally says so rather than implying end-to-end privacy.
+- **Honest about the relay.** Media flows through the SFU — Air says so rather than implying end-to-end privacy.
 - **Supabase for auth and room metadata only.** A server route mints short-lived LiveKit tokens after verifying auth and room membership.
 - **On-device processing.** Noise suppression and background blur run in the browser; the *processed* tracks are what get published.
 
@@ -113,7 +113,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 > Testing two participants on one machine? Use two different browsers, or launch a second Chrome with a fake camera so both have video:
 > ```
-> chrome --user-data-dir=/tmp/rally-test --use-fake-device-for-media-stream --use-fake-ui-for-media-stream http://localhost:3000
+> chrome --user-data-dir=/tmp/air-test --use-fake-device-for-media-stream --use-fake-ui-for-media-stream http://localhost:3000
 > ```
 
 ## Scripts

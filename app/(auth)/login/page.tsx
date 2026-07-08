@@ -19,14 +19,15 @@ export default function LoginPage() {
           className="flex items-center justify-center gap-2 text-lg font-semibold tracking-tight"
         >
           <span className="inline-block size-2.5 rounded-full bg-primary" />
-          Rally
+          Air
         </Link>
 
         <Card>
           <CardHeader className="text-center">
-            <CardTitle>Sign in to Rally</CardTitle>
+            <CardTitle>Sign in to Air</CardTitle>
             <CardDescription>
-              Large-group video calls for up to 50 people.
+              Active Interaction Rooms — large-group video calls for up to 50
+              people.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -37,7 +38,7 @@ export default function LoginPage() {
         </Card>
 
         <p className="px-6 text-center text-xs text-muted-foreground">
-          Heads up: Rally relays your audio and video through a media server so
+          Heads up: Air relays your audio and video through a media server so
           rooms can scale — calls are not peer-to-peer private.
         </p>
       </div>

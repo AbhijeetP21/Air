@@ -70,7 +70,7 @@ export function RoomClient(props: RoomClientProps) {
       <CenteredMessage
         icon={<MonitorX className="size-6 text-muted-foreground" />}
         title="This browser isn't supported"
-        body="Rally needs WebRTC and camera/microphone access. Try the latest Chrome, Edge, Firefox, or Safari."
+        body="Air needs WebRTC and camera/microphone access. Try the latest Chrome, Edge, Firefox, or Safari."
         action={
           <Link href="/" className={cn(buttonVariants({ variant: 'outline' }))}>
             Back to home

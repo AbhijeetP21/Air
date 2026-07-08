@@ -1,6 +1,6 @@
--- Rally: large rooms.
+-- Air: large rooms.
 --
--- Pact capped rooms at a P2P-mesh-friendly size. Rally runs on an SFU, so a
+-- Pact capped rooms at a P2P-mesh-friendly size. Air runs on an SFU, so a
 -- single upstream fans out to everyone — lift the cap to 50 by default
 -- (architecture scales to 100+).
 

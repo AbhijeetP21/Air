@@ -128,7 +128,7 @@ function parseMetadata(metadata: string | undefined): {
 }
 
 /**
- * Rally's call engine. Where Pact ran a peer-to-peer mesh, Rally publishes one
+ * Air's call engine. Where Pact ran a peer-to-peer mesh, Air publishes one
  * upstream to a LiveKit SFU which forwards it to everyone — so upload cost is
  * O(1), not O(N), and rooms scale past a mesh's ~5-peer ceiling.
  *
