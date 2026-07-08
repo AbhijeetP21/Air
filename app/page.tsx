@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { Radio, Server, Users } from 'lucide-react'
+import { MonitorUp, Sparkles, Users } from 'lucide-react'
 
 import { createServerClient } from '@/lib/supabase/server'
 import { cn } from '@/lib/utils'
@@ -61,9 +61,9 @@ export default async function Home() {
             scale to the room.
           </h1>
           <p className="mx-auto max-w-xl text-balance text-lg text-muted-foreground">
-            Group calls for up to 50 people. Each person uploads one stream to a
-            media server that forwards it to everyone — so rooms grow without
-            melting your connection.
+            Host up to 50 people in one call. Share a link and everyone&apos;s
+            in — with screen share, live chat, and studio touches like noise
+            suppression and background blur.
           </p>
         </div>
 
@@ -80,24 +80,25 @@ export default async function Home() {
         <dl className="grid w-full gap-6 pt-6 sm:grid-cols-3">
           <Feature
             icon={<Users className="size-5 text-primary" />}
-            title="Up to 50 per room"
-            body="Architecture scales past 100 — the client, not the server, is the limit."
+            title="Built for big rooms"
+            body="Up to 50 people per call, with an active-speaker grid that keeps whoever's talking front and center."
           />
           <Feature
-            icon={<Radio className="size-5 text-primary" />}
-            title="One upstream each"
-            body="You send a single stream; the SFU fans it out. Upload stays constant."
+            icon={<MonitorUp className="size-5 text-primary" />}
+            title="Everything a meeting needs"
+            body="Screen share, raised hands, host controls, and in-call chat that vanishes when the call ends."
           />
           <Feature
-            icon={<Server className="size-5 text-primary" />}
-            title="Server-relayed"
-            body="Media flows through the SFU, not device-to-device — honest about the trade-off."
+            icon={<Sparkles className="size-5 text-primary" />}
+            title="Studio touches, on-device"
+            body="Noise suppression and background blur run in your browser, before your video ever leaves it."
           />
         </dl>
       </main>
 
       <footer className="mx-auto w-full max-w-5xl px-6 py-8 text-center text-xs text-muted-foreground">
-        Air — Active Interaction Rooms. Large-group video over a LiveKit SFU.
+        Air — Active Interaction Rooms. Calls are relayed through a media
+        server to make big rooms possible.
       </footer>
     </div>
   )

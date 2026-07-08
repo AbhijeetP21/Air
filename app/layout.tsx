@@ -21,7 +21,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: 'Air: Active Interaction Rooms',
   description:
-    'Large-group video calls for up to 50 people. An SFU forwards one upstream to everyone, so rooms scale far past a peer-to-peer mesh.',
+    'Large-group video calls for up to 50 people. Share a link and the whole room is in — screen share, chat, and on-device noise suppression and blur.',
 }
 
 export const viewport: Viewport = {
