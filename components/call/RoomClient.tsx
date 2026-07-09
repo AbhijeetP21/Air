@@ -12,6 +12,7 @@ import {
   Maximize,
   Minimize,
   MonitorX,
+  NotebookPen,
   Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -27,6 +28,7 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { ChatPanel } from '@/components/call/ChatPanel'
 import { ControlBar } from '@/components/call/ControlBar'
 import { LocalPreview } from '@/components/call/LocalPreview'
+import { NotesPanel } from '@/components/call/NotesPanel'
 import { ParticipantGrid } from '@/components/call/ParticipantGrid'
 import { PaginatedGrid } from '@/components/call/PaginatedGrid'
 import { ParticipantsPanel } from '@/components/call/ParticipantsPanel'
@@ -108,6 +110,13 @@ function CallExperience({
     sendChat,
     handRaised,
     toggleHand,
+    transcript,
+    notesEnabled,
+    toggleNotes,
+    noteTakers,
+    transcriberStatus,
+    transcriberProgress,
+    canTranscribe,
     setVisibleParticipants,
     join,
     toggleAudio,
@@ -170,6 +179,10 @@ function CallExperience({
   // and vice-versa so they never overlap on the same right rail.
   const [participantsOpen, setParticipantsOpen] = useState(false)
 
+  // AI notes panel (same right rail, mutually exclusive with the others).
+  const [notesOpen, setNotesOpen] = useState(false)
+  const notesRunning = notesEnabled || noteTakers.length > 0
+
   // ---- Back-gesture guard -------------------------------------------------
   // On phones a back swipe fires history-back, which used to silently kick the
   // user out of the call. While in an active call we hold a sentinel history
@@ -178,12 +191,16 @@ function CallExperience({
   // handler current without re-pushing a sentinel on every panel toggle.
   const chatOpenRef = useRef(false)
   const participantsOpenRef = useRef(false)
+  const notesOpenRef = useRef(false)
   useEffect(() => {
     chatOpenRef.current = chatOpen
   }, [chatOpen])
   useEffect(() => {
     participantsOpenRef.current = participantsOpen
   }, [participantsOpen])
+  useEffect(() => {
+    notesOpenRef.current = notesOpen
+  }, [notesOpen])
 
   const inActiveCall =
     callStatus === 'connected' ||
@@ -194,10 +211,15 @@ function CallExperience({
     if (!inActiveCall) return
     window.history.pushState({ airCall: true }, '')
     const onPop = () => {
-      if (chatOpenRef.current || participantsOpenRef.current) {
+      if (
+        chatOpenRef.current ||
+        participantsOpenRef.current ||
+        notesOpenRef.current
+      ) {
         // Back from a panel returns to the call, like a native app.
         setChatOpen(false)
         setParticipantsOpen(false)
+        setNotesOpen(false)
         window.history.pushState({ airCall: true }, '')
         return
       }
@@ -448,6 +470,21 @@ function CallExperience({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Consent indicator: visible to everyone while notes run anywhere. */}
+          {notesRunning && (
+            <Badge
+              variant="outline"
+              className="gap-1.5"
+              title={
+                noteTakers.length > 0
+                  ? `Taking notes: ${noteTakers.join(', ')}${notesEnabled ? ', you' : ''}`
+                  : 'You are taking notes'
+              }
+            >
+              <NotebookPen className="size-3" />
+              Notes on
+            </Badge>
+          )}
           <Badge variant="outline" className="gap-1.5">
             <span
               className={cn(
@@ -542,14 +579,23 @@ function CallExperience({
         onToggleBackgroundBlur={() => void toggleBackgroundBlur()}
         handRaised={handRaised}
         participantsOpen={participantsOpen}
+        notesOpen={notesOpen}
+        notesRunning={notesRunning}
         onToggleChat={() => {
           setChatOpen((o) => !o)
           setParticipantsOpen(false)
+          setNotesOpen(false)
         }}
         onToggleHand={toggleHand}
         onToggleParticipants={() => {
           setParticipantsOpen((o) => !o)
           setChatOpen(false)
+          setNotesOpen(false)
+        }}
+        onToggleNotes={() => {
+          setNotesOpen((o) => !o)
+          setChatOpen(false)
+          setParticipantsOpen(false)
         }}
         onLeave={() => void leaveCall()}
       />
@@ -560,6 +606,20 @@ function CallExperience({
         messages={chatMessages}
         selfPeerId={selfPeerId}
         onSend={sendChat}
+      />
+
+      <NotesPanel
+        open={notesOpen}
+        onClose={() => setNotesOpen(false)}
+        transcript={transcript}
+        selfPeerId={selfPeerId}
+        roomName={roomName ?? 'Private room'}
+        notesEnabled={notesEnabled}
+        onToggleNotes={toggleNotes}
+        noteTakers={noteTakers}
+        transcriberStatus={transcriberStatus}
+        transcriberProgress={transcriberProgress}
+        canTranscribe={canTranscribe}
       />
 
       <ParticipantsPanel

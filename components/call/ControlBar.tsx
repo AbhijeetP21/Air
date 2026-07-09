@@ -8,6 +8,7 @@ import {
   Mic,
   MicOff,
   MonitorUp,
+  NotebookPen,
   PhoneOff,
   SwitchCamera,
   Users,
@@ -29,6 +30,9 @@ export type ControlBarProps = {
   canScreenShare: boolean
   handRaised: boolean
   participantsOpen: boolean
+  notesOpen: boolean
+  /** Anyone in the room (us included) currently has AI notes running. */
+  notesRunning: boolean
   onToggleAudio: () => void
   onToggleVideo: () => void
   onFlipCamera: () => void
@@ -38,6 +42,7 @@ export type ControlBarProps = {
   onToggleChat: () => void
   onToggleHand: () => void
   onToggleParticipants: () => void
+  onToggleNotes: () => void
   onLeave: () => void
 }
 
@@ -55,6 +60,8 @@ export function ControlBar({
   canScreenShare,
   handRaised,
   participantsOpen,
+  notesOpen,
+  notesRunning,
   onToggleAudio,
   onToggleVideo,
   onFlipCamera,
@@ -64,6 +71,7 @@ export function ControlBar({
   onToggleChat,
   onToggleHand,
   onToggleParticipants,
+  onToggleNotes,
   onLeave,
 }: ControlBarProps) {
   return (
@@ -165,6 +173,19 @@ export function ControlBar({
           label={participantsOpen ? 'Hide participants' : 'Show participants'}
         >
           <Users className="size-5" />
+        </ControlButton>
+
+        <ControlButton
+          active={notesOpen}
+          highlight
+          onClick={onToggleNotes}
+          label={notesOpen ? 'Close AI notes' : 'Open AI notes'}
+        >
+          <NotebookPen className="size-5" />
+          {/* Recording-style dot: notes are live somewhere in the room. */}
+          {notesRunning && (
+            <span className="absolute -right-0.5 -top-0.5 size-2.5 animate-pulse rounded-full bg-primary ring-2 ring-zinc-900" />
+          )}
         </ControlButton>
 
         <ControlButton

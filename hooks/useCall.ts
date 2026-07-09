@@ -22,8 +22,20 @@ import {
 import { createClient } from '@/lib/supabase/client'
 import { useMedia } from '@/hooks/useMedia'
 import { useParticipants } from '@/hooks/useParticipants'
-import { MAX_DISPLAY_NAME_LENGTH } from '@/lib/utils'
+import { isLikelyMobile, MAX_DISPLAY_NAME_LENGTH } from '@/lib/utils'
 import { sanitizeChatImage } from '@/lib/chat/image'
+import {
+  appendTranscriptLine,
+  NOTES_TOPIC,
+  sanitizeNotesSignal,
+  type NotesSignal,
+  type TranscriptLine,
+} from '@/lib/notes/protocol'
+import {
+  LocalTranscriber,
+  supportsLocalTranscription,
+  type TranscriberStatus,
+} from '@/lib/notes/transcriber'
 import { rtcError, rtcLog } from '@/lib/webrtc/log'
 import type {
   CallStatus,
@@ -68,6 +80,20 @@ export type UseCallReturn = {
   handRaised: boolean
   /** Toggle the local raised hand (broadcast to the room over a data channel). */
   toggleHand: () => void
+  /** Assembled meeting transcript (all participants' shared lines). */
+  transcript: TranscriptLine[]
+  /** Whether the local user has AI note-taking turned on. */
+  notesEnabled: boolean
+  /** Toggle local note-taking (announced to the room; consent, like Meet). */
+  toggleNotes: () => void
+  /** Remote participants currently taking notes (display names). */
+  noteTakers: string[]
+  /** Local speech-recognition engine lifecycle (model download → ready). */
+  transcriberStatus: TranscriberStatus
+  /** Model download progress 0-100 while transcriberStatus is 'loading'. */
+  transcriberProgress: number | null
+  /** This device can contribute local transcription. */
+  canTranscribe: boolean
   /**
    * Report the identities currently on screen so the SFU subscription can be
    * scoped to them (audio stays subscribed for everyone). Safe to call every
@@ -188,6 +214,20 @@ export function useCall({
   const [handRaised, setHandRaised] = useState(false)
   // Mirror for event handlers (rebroadcast to newcomers without stale closures).
   const handRaisedRef = useRef(false)
+  // ---- AI notes state ----
+  const [transcript, setTranscript] = useState<TranscriptLine[]>([])
+  const [notesEnabled, setNotesEnabled] = useState(false)
+  const notesEnabledRef = useRef(false)
+  // Remote note-takers: identity → display name. While anyone (us or them) has
+  // notes on, every capable client transcribes its own mic and shares lines.
+  const [noteTakerMap, setNoteTakerMap] = useState<Map<string, string>>(
+    () => new Map(),
+  )
+  const [transcriberStatus, setTranscriberStatus] =
+    useState<TranscriberStatus>('idle')
+  const [transcriberProgress, setTranscriberProgress] = useState<number | null>(
+    null,
+  )
   // Last-known hand state per remote identity. Hands are rebroadcast whenever
   // someone joins, so we only toast on a false→true *transition*, not on every
   // received payload.
@@ -350,6 +390,20 @@ export function useCall({
     [self],
   )
 
+  // Broadcast a notes-protocol signal (state announcement or transcript line).
+  const publishNotes = useCallback((signal: NotesSignal) => {
+    const room = roomRef.current
+    if (!room) return
+    const payload = new TextEncoder().encode(JSON.stringify(signal))
+    const opts: DataPublishOptions = { reliable: true, topic: NOTES_TOPIC }
+    void room.localParticipant
+      .publishData(
+        payload as Parameters<typeof room.localParticipant.publishData>[0],
+        opts,
+      )
+      .catch((err) => rtcError('Notes', 'notes broadcast failed', err))
+  }, [])
+
   // ---- Room event wiring --------------------------------------------------
 
   const wireRoom = useCallback(
@@ -364,10 +418,18 @@ export function useCall({
           // Hand state is event-based, so a newcomer would otherwise never
           // learn ours — re-announce it for them.
           if (handRaisedRef.current) publishHand(true)
+          // Same for note-taking: late joiners must know notes are on (consent).
+          if (notesEnabledRef.current) publishNotes({ kind: 'state', active: true })
         })
         .on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
           rtcLog('Call', `participant left: ${p.identity}`)
           removeRemote(p.identity)
+          setNoteTakerMap((prev) => {
+            if (!prev.has(p.identity)) return prev
+            const next = new Map(prev)
+            next.delete(p.identity)
+            return next
+          })
         })
         .on(
           RoomEvent.TrackPublished,
@@ -446,6 +508,43 @@ export function useCall({
                 }
                 return
               }
+              if (topic === NOTES_TOPIC) {
+                const signal = sanitizeNotesSignal(JSON.parse(text))
+                if (!signal) return
+                if (signal.kind === 'state') {
+                  setNoteTakerMap((prev) => {
+                    const wasTaking = prev.has(p.identity)
+                    if (signal.active === wasTaking) return prev
+                    const next = new Map(prev)
+                    if (signal.active) {
+                      next.set(p.identity, p.name || 'Someone')
+                      // Consent surface: the whole room learns notes are on.
+                      toast(`${p.name || 'Someone'} is taking AI notes`, {
+                        icon: '📝',
+                      })
+                    } else {
+                      next.delete(p.identity)
+                    }
+                    return next
+                  })
+                } else {
+                  setTranscript((prev) =>
+                    appendTranscriptLine(prev, {
+                      id: nanoid(8),
+                      // Speaker = SFU-verified sender; lines are always the
+                      // sender's own speech, so attribution can't be forged.
+                      peerId: p.identity,
+                      displayName: (p.name || 'Guest').slice(
+                        0,
+                        MAX_DISPLAY_NAME_LENGTH,
+                      ),
+                      text: signal.text,
+                      at: signal.at,
+                    }),
+                  )
+                }
+                return
+              }
               if (topic !== CHAT_TOPIC) return
               const msg = JSON.parse(text) as ChatMessage
               setChatMessages((prev) =>
@@ -485,6 +584,7 @@ export function useCall({
           screenOwnsVideoPubRef.current = false
           remoteStreamsRef.current.clear()
           remoteHandsRef.current.clear()
+          setNoteTakerMap(new Map())
           clearRemote()
           if (reason === DisconnectReason.PARTICIPANT_REMOVED) {
             toast.error('You were removed from the call by the host.')
@@ -510,6 +610,7 @@ export function useCall({
       reconcileSubscriptions,
       media,
       publishHand,
+      publishNotes,
       clearRemote,
       router,
     ],
@@ -555,6 +656,10 @@ export function useCall({
       screenOwnsVideoPubRef.current = false
       handRaisedRef.current = false
       setHandRaised(false)
+      notesEnabledRef.current = false
+      setNotesEnabled(false)
+      setNoteTakerMap(new Map())
+      setTranscript([])
       remoteStreamsRef.current.clear()
       remoteHandsRef.current.clear()
       media.stopAll()
@@ -696,6 +801,7 @@ export function useCall({
     // After a lobby rejoin (post-disconnect) our hand may still be up — tell
     // the room, since only newcomers get the rebroadcast otherwise.
     if (handRaisedRef.current) publishHand(true)
+    if (notesEnabledRef.current) publishNotes({ kind: 'state', active: true })
 
     setCallStatus('connected')
     rtcLog('Call', `joined room ${slug} as ${self.peerId}`)
@@ -711,6 +817,7 @@ export function useCall({
     addRemote,
     reconcileSubscriptions,
     publishHand,
+    publishNotes,
   ])
 
   // Keep the local participant's preview stream + mic/camera flags in sync.
@@ -785,6 +892,68 @@ export function useCall({
     patch(self.peerId, { handRaised: raised })
     publishHand(raised)
   }, [self, patch, publishHand])
+
+  // ---- AI notes -------------------------------------------------------------
+
+  const toggleNotes = useCallback(() => {
+    const active = !notesEnabledRef.current
+    notesEnabledRef.current = active
+    setNotesEnabled(active)
+    publishNotes({ kind: 'state', active })
+  }, [publishNotes])
+
+  // Phones sit this out (thermals — same policy as blur/noise suppression);
+  // they still hear everyone's lines and can read/export the transcript.
+  const canTranscribe =
+    typeof window !== 'undefined' &&
+    supportsLocalTranscription() &&
+    !isLikelyMobile()
+
+  // While anyone in the room is taking notes, transcribe our own mic locally
+  // and share the finished lines. Each voice is recognized from its clean,
+  // pre-mix audio on its own device — audio never leaves the machine.
+  const transcriptionActive =
+    callStatus === 'connected' && (notesEnabled || noteTakerMap.size > 0)
+  useEffect(() => {
+    if (!transcriptionActive || !canTranscribe) return
+    const stream = media.mediaState.localStream
+    if (!stream || stream.getAudioTracks().length === 0) return
+
+    const transcriber = new LocalTranscriber({
+      onLine: (text) => {
+        const at = Date.now()
+        setTranscript((prev) =>
+          appendTranscriptLine(prev, {
+            id: nanoid(8),
+            peerId: self.peerId,
+            displayName: self.displayName,
+            text,
+            at,
+          }),
+        )
+        publishNotes({ kind: 'line', text, at })
+      },
+      onStatus: (status, progress) => {
+        setTranscriberStatus(status)
+        setTranscriberProgress(progress ?? null)
+      },
+    })
+    transcriber.start(stream)
+    return () => {
+      transcriber.stop()
+      setTranscriberStatus('idle')
+      setTranscriberProgress(null)
+    }
+    // noiseSuppression is a dependency because toggling it replaces the audio
+    // track inside the stream — the capture graph must re-tap the new track.
+  }, [
+    transcriptionActive,
+    canTranscribe,
+    media.mediaState.localStream,
+    media.mediaState.noiseSuppression,
+    self,
+    publishNotes,
+  ])
 
   // ---- Screen share -------------------------------------------------------
 
@@ -877,6 +1046,13 @@ export function useCall({
     sendChat,
     handRaised,
     toggleHand,
+    transcript,
+    notesEnabled,
+    toggleNotes,
+    noteTakers: Array.from(noteTakerMap.values()),
+    transcriberStatus,
+    transcriberProgress,
+    canTranscribe,
     setVisibleParticipants,
     join,
     toggleAudio: media.toggleAudio,
