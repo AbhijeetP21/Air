@@ -9,6 +9,18 @@ export interface Room {
   expires_at: string | null
   max_participants: number
   is_active: boolean
+  /** When true, non-host joiners need host approval before receiving a token. */
+  waiting_room: boolean
+}
+
+/** A pending request to join a waiting-room-enabled room. */
+export interface JoinRequest {
+  id: string
+  room_id: string
+  user_id: string
+  display_name: string | null
+  status: 'pending' | 'approved' | 'denied'
+  created_at: string
 }
 
 export interface Participant {
@@ -82,6 +94,8 @@ export type CallStatus =
   | 'idle'
   | 'acquiring-media'
   | 'connecting'
+  /** Waiting-room: request filed, polling until the host admits us. */
+  | 'waiting-approval'
   | 'connected'
   | 'reconnecting'
   | 'error'

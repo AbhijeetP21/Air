@@ -1,10 +1,22 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Hand, MicOff, Search, UserX, VideoOff, Volume2, VolumeX, X } from 'lucide-react'
+import {
+  Check,
+  DoorClosed,
+  Hand,
+  MicOff,
+  Search,
+  UserX,
+  Video,
+  VideoOff,
+  Volume2,
+  VolumeX,
+  X,
+} from 'lucide-react'
 
-import { initialsFromName } from '@/lib/utils'
-import type { Participant } from '@/types'
+import { cn, initialsFromName } from '@/lib/utils'
+import type { JoinRequest, Participant } from '@/types'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,8 +35,15 @@ export function ParticipantsPanel({
   isHost,
   onFocus,
   onMute,
+  onMuteVideo,
   onRemove,
   onMuteAll,
+  waitingRoomEnabled,
+  onToggleWaitingRoom,
+  pendingRequests,
+  onApprove,
+  onDeny,
+  onAdmitAll,
 }: {
   open: boolean
   onClose: () => void
@@ -34,8 +53,16 @@ export function ParticipantsPanel({
   isHost: boolean
   onFocus?: (peerId: string) => void
   onMute: (identity: string) => void
+  onMuteVideo: (identity: string) => void
   onRemove: (identity: string) => void
   onMuteAll: () => void
+  /** Waiting room (host only; ignored otherwise). */
+  waitingRoomEnabled: boolean
+  onToggleWaitingRoom: (on: boolean) => void
+  pendingRequests: JoinRequest[]
+  onApprove: (requestId: string) => void
+  onDeny: (requestId: string) => void
+  onAdmitAll: () => void
 }) {
   const [query, setQuery] = useState('')
 
@@ -90,6 +117,95 @@ export function ParticipantsPanel({
           </Button>
         )}
       </div>
+
+      {/* Waiting room — host only. */}
+      {isHost && (
+        <div className="border-b p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <DoorClosed className="size-4 text-primary" />
+              <div>
+                <p className="font-medium">Waiting room</p>
+                <p className="text-xs text-muted-foreground">
+                  New joiners need your approval.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={waitingRoomEnabled}
+              aria-label="Waiting room"
+              onClick={() => onToggleWaitingRoom(!waitingRoomEnabled)}
+              className={cn(
+                'inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors',
+                waitingRoomEnabled ? 'bg-primary' : 'bg-muted',
+              )}
+            >
+              <span
+                className={cn(
+                  'inline-block size-5 rounded-full bg-white shadow-sm transition-transform',
+                  waitingRoomEnabled ? 'translate-x-5' : 'translate-x-0',
+                )}
+              />
+            </button>
+          </div>
+
+          {waitingRoomEnabled && pendingRequests.length > 0 && (
+            <div className="mt-3 space-y-1">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Waiting to join ({pendingRequests.length})
+                </p>
+                {pendingRequests.length > 1 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-xs"
+                    onClick={onAdmitAll}
+                  >
+                    <Check className="size-3.5" />
+                    Admit all
+                  </Button>
+                )}
+              </div>
+              <ul>
+                {pendingRequests.map((req) => (
+                  <li
+                    key={req.id}
+                    className="flex items-center gap-2 rounded-lg px-1 py-1.5"
+                  >
+                    <Avatar className="size-7 shrink-0">
+                      <AvatarFallback className="text-[10px]">
+                        {initialsFromName(req.display_name || '?')}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="min-w-0 flex-1 truncate text-sm">
+                      {req.display_name || 'Guest'}
+                    </span>
+                    <Button
+                      size="sm"
+                      className="h-7 px-2.5 text-xs"
+                      onClick={() => onApprove(req.id)}
+                    >
+                      Admit
+                    </Button>
+                    <button
+                      type="button"
+                      onClick={() => onDeny(req.id)}
+                      aria-label={`Deny ${req.display_name || 'Guest'}`}
+                      title="Deny"
+                      className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       <ul className="flex-1 overflow-y-auto p-2">
         {filtered.length === 0 ? (
@@ -151,6 +267,16 @@ export function ParticipantsPanel({
                       className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
                     >
                       <Volume2 className="size-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onMuteVideo(p.peerId)}
+                      disabled={!p.videoEnabled}
+                      aria-label={`Pause ${p.displayName}'s video`}
+                      title="Pause video"
+                      className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+                    >
+                      <Video className="size-4" />
                     </button>
                     <button
                       type="button"

@@ -17,6 +17,7 @@ import {
 import { toast } from 'sonner'
 
 import { useCall } from '@/hooks/useCall'
+import { useWaitingRoom } from '@/hooks/useWaitingRoom'
 import { useAudioLevel } from '@/hooks/useAudioLevel'
 import { useDeviceCapabilities } from '@/hooks/useDeviceCapabilities'
 import { useWakeLock } from '@/hooks/useWakeLock'
@@ -39,10 +40,14 @@ const SPOTLIGHT_FILMSTRIP_MAX = 8
 
 export type RoomClientProps = {
   slug: string
+  /** rooms.id — used for waiting-room join requests. */
+  roomId: string
   roomName: string | null
   maxParticipants: number
   /** The room creator's user id — gates host moderation controls. */
   hostId: string
+  /** rooms.waiting_room at page load. */
+  waitingRoom: boolean
   user: {
     id: string
     displayName: string
@@ -85,9 +90,11 @@ export function RoomClient(props: RoomClientProps) {
 
 function CallExperience({
   slug,
+  roomId,
   roomName,
   maxParticipants,
   hostId,
+  waitingRoom,
   user,
 }: RoomClientProps) {
   const {
@@ -111,9 +118,17 @@ function CallExperience({
     startScreenShare,
     stopScreenShare,
     leaveCall,
-  } = useCall({ slug, maxParticipants, user })
+  } = useCall({ slug, roomId, maxParticipants, user })
 
   const isHost = user.id === hostId
+
+  // Host-side waiting-room queue (inert for non-hosts).
+  const waiting = useWaitingRoom({
+    roomId,
+    isHost,
+    initialEnabled: waitingRoom,
+    active: callStatus === 'connected',
+  })
 
   const { isMobile, canScreenShare } = useDeviceCapabilities()
 
@@ -155,8 +170,62 @@ function CallExperience({
   // and vice-versa so they never overlap on the same right rail.
   const [participantsOpen, setParticipantsOpen] = useState(false)
 
+  // ---- Back-gesture guard -------------------------------------------------
+  // On phones a back swipe fires history-back, which used to silently kick the
+  // user out of the call. While in an active call we hold a sentinel history
+  // entry: the first back closes any open panel (the natural gesture when
+  // you're in chat), the next one asks before leaving. Refs keep the popstate
+  // handler current without re-pushing a sentinel on every panel toggle.
+  const chatOpenRef = useRef(false)
+  const participantsOpenRef = useRef(false)
+  useEffect(() => {
+    chatOpenRef.current = chatOpen
+  }, [chatOpen])
+  useEffect(() => {
+    participantsOpenRef.current = participantsOpen
+  }, [participantsOpen])
+
+  const inActiveCall =
+    callStatus === 'connected' ||
+    callStatus === 'connecting' ||
+    callStatus === 'reconnecting'
+
+  useEffect(() => {
+    if (!inActiveCall) return
+    window.history.pushState({ airCall: true }, '')
+    const onPop = () => {
+      if (chatOpenRef.current || participantsOpenRef.current) {
+        // Back from a panel returns to the call, like a native app.
+        setChatOpen(false)
+        setParticipantsOpen(false)
+        window.history.pushState({ airCall: true }, '')
+        return
+      }
+      if (window.confirm('Leave the call?')) {
+        void leaveCall()
+      } else {
+        window.history.pushState({ airCall: true }, '')
+      }
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [inActiveCall, leaveCall])
+
+  // Closing the tab / refreshing mid-call gets a native "leave site?" prompt.
+  useEffect(() => {
+    if (!inActiveCall) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [inActiveCall])
+
   const moderate = useCallback(
-    async (action: 'mute' | 'remove' | 'mute-all', targetIdentity?: string) => {
+    async (
+      action: 'mute' | 'mute-video' | 'remove' | 'mute-all',
+      targetIdentity?: string,
+    ) => {
       try {
         const res = await fetch('/api/livekit-room', {
           method: 'POST',
@@ -211,6 +280,10 @@ function CallExperience({
     if (!usesPagination) return participants
     return [...participants].sort((a, b) => {
       if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1
+      // Raised hands surface to page 1 so the host actually sees them.
+      const ah = a.handRaised ? 1 : 0
+      const bh = b.handRaised ? 1 : 0
+      if (ah !== bh) return bh - ah
       const at = a.lastSpokeAt ?? 0
       const bt = b.lastSpokeAt ?? 0
       if (at !== bt) return bt - at
@@ -258,6 +331,21 @@ function CallExperience({
         icon={<Loader2 className="size-6 animate-spin text-primary" />}
         title="Setting up your camera and microphone"
         body="Allow access when your browser asks."
+      />
+    )
+  }
+
+  if (callStatus === 'waiting-approval') {
+    return (
+      <CenteredMessage
+        icon={<Loader2 className="size-6 animate-spin text-primary" />}
+        title="Asking to join…"
+        body="The host has been notified. You'll be let in as soon as they approve."
+        action={
+          <Button variant="outline" onClick={() => void leaveCall()}>
+            Cancel
+          </Button>
+        }
       />
     )
   }
@@ -483,8 +571,15 @@ function CallExperience({
         isHost={isHost}
         onFocus={setFocusedPeerId}
         onMute={(identity) => void moderate('mute', identity)}
+        onMuteVideo={(identity) => void moderate('mute-video', identity)}
         onRemove={(identity) => void moderate('remove', identity)}
         onMuteAll={() => void moderate('mute-all')}
+        waitingRoomEnabled={waiting.enabled}
+        onToggleWaitingRoom={(on) => void waiting.setWaitingRoom(on)}
+        pendingRequests={waiting.pending}
+        onApprove={(id) => void waiting.approve(id)}
+        onDeny={(id) => void waiting.deny(id)}
+        onAdmitAll={() => void waiting.admitAll()}
       />
     </div>
   )

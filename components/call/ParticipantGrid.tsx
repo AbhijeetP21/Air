@@ -3,19 +3,25 @@
 import { cn } from '@/lib/utils'
 import type { Participant } from '@/types'
 import { VideoTile } from '@/components/call/VideoTile'
+import {
+  GAP_PX,
+  PHONE_MAX_WIDTH_PX,
+  bestLayout,
+  useContainerSize,
+} from '@/components/call/gridLayout'
 
 /**
- * Responsive grid for 1–5 participants.
+ * Responsive grid for small rooms (≤5 participants; larger rooms use
+ * PaginatedGrid).
  *
- * Desktop (sm+) keeps the spec's exact layouts at a capped width with 16:9
- * tiles, vertically centered:
- *   1 → single        2 → side by side       3 → 2 over 1 (centered)
- *   4 → 2×2           5 → 2 over 3
+ * Desktop/tablet: Meet-style computed layout — the container is measured and
+ * the column count that yields the largest tiles wins (see gridLayout.ts).
+ * Rows are centered, so odd tail tiles (3rd of 3, 5th of 5) sit centered.
  *
- * Phones (portrait) instead fill the whole screen, FaceTime/Meet style: the
- * grid takes the full available height with equal-height rows, stacking 1–2
- * people vertically and using 2 columns for 3–5 (the odd last tile spans the
- * full width). This avoids tiny letterboxed tiles with a dead black void below.
+ * Phones (narrow containers) keep the FaceTime/Meet fill-the-screen behavior:
+ * equal-height rows, stacking 1–2 people vertically and using 2 columns for
+ * 3–5 (the odd last tile spans the full width). This avoids tiny letterboxed
+ * tiles with a dead black void below.
  */
 export function ParticipantGrid({
   participants,
@@ -30,54 +36,72 @@ export function ParticipantGrid({
   onFocus?: (peerId: string) => void
 }) {
   const count = participants.length
+  const { containerRef, size } = useContainerSize()
+
+  const renderTile = (p: Participant) => (
+    <VideoTile
+      participant={p}
+      mirror={p.isLocal && mirrorLocal}
+      localSpeaking={p.isLocal ? localSpeaking : undefined}
+      onExpand={onFocus ? () => onFocus(p.peerId) : undefined}
+    />
+  )
+
+  // Measure on the first committed frame; children render right after.
+  if (size === null) {
+    return <div ref={containerRef} className="size-full" />
+  }
+
+  if (size.w < PHONE_MAX_WIDTH_PX) {
+    return (
+      <div ref={containerRef} className="size-full">
+        <div
+          className={cn(
+            'grid size-full auto-rows-fr gap-3',
+            count <= 2 ? 'grid-cols-1' : 'grid-cols-2',
+          )}
+        >
+          {participants.map((p, i) => (
+            <div
+              key={p.peerId}
+              className={cn(
+                'min-h-0',
+                // Odd tail tile (3rd of 3, 5th of 5) gets its own full row.
+                count % 2 === 1 && count > 1 && i === count - 1 && 'col-span-2',
+              )}
+            >
+              {renderTile(p)}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  const { cols, tileW, tileH } = bestLayout(count, size.w, size.h)
+  const rows: Participant[][] = []
+  for (let i = 0; i < count; i += cols) rows.push(participants.slice(i, i + cols))
 
   return (
-    <div
-      className={cn(
-        'mx-auto grid w-full gap-3',
-        // Mobile: fill height with equal rows. Desktop: natural height, capped.
-        'h-full auto-rows-fr sm:h-auto sm:max-w-6xl sm:auto-rows-auto',
-        gridClass(count),
-      )}
-    >
-      {participants.map((p, i) => (
-        <div
-          key={p.peerId}
-          className={cn('min-h-0 sm:aspect-video', tileClass(count, i))}
-        >
-          <VideoTile
-            participant={p}
-            mirror={p.isLocal && mirrorLocal}
-            localSpeaking={p.isLocal ? localSpeaking : undefined}
-            onExpand={onFocus ? () => onFocus(p.peerId) : undefined}
-          />
-        </div>
-      ))}
+    <div ref={containerRef} className="size-full">
+      <div
+        className="flex size-full flex-col items-center justify-center"
+        style={{ gap: GAP_PX }}
+      >
+        {rows.map((row) => (
+          <div
+            key={row[0].peerId}
+            className="flex justify-center"
+            style={{ gap: GAP_PX }}
+          >
+            {row.map((p) => (
+              <div key={p.peerId} style={{ width: tileW, height: tileH }}>
+                {renderTile(p)}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   )
-}
-
-function gridClass(count: number): string {
-  // Mobile (base): stack ≤2, otherwise 2 columns.
-  const mobile = count <= 2 ? 'grid-cols-1' : 'grid-cols-2'
-  // Desktop: the spec's exact column counts.
-  const desktop =
-    count === 1 ? 'sm:grid-cols-1' : count === 5 ? 'sm:grid-cols-6' : 'sm:grid-cols-2'
-  return `${mobile} ${desktop}`
-}
-
-function tileClass(count: number, index: number): string {
-  // 3 people: third tile spans the full width on mobile (its own row), and is
-  // centered at single-column width on desktop.
-  if (count === 3 && index === 2) {
-    return 'col-span-2 sm:w-[calc(50%-0.375rem)] sm:justify-self-center'
-  }
-  // 5 people: desktop is 2 wide on top (span 3 of 6) and 3 on the bottom (span
-  // 2 of 6). On mobile it's a plain 2-col grid; the lone 5th tile goes full width.
-  if (count === 5) {
-    if (index < 2) return 'sm:col-span-3'
-    if (index === 4) return 'col-span-2 sm:col-span-2'
-    return 'sm:col-span-2'
-  }
-  return ''
 }

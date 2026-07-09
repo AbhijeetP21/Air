@@ -19,6 +19,7 @@ import {
   type TrackPublication,
 } from 'livekit-client'
 
+import { createClient } from '@/lib/supabase/client'
 import { useMedia } from '@/hooks/useMedia'
 import { useParticipants } from '@/hooks/useParticipants'
 import { MAX_DISPLAY_NAME_LENGTH } from '@/lib/utils'
@@ -44,6 +45,8 @@ const HAND_TOPIC = 'hand'
 
 export type UseCallParams = {
   slug: string
+  /** rooms.id — needed to file waiting-room join requests. */
+  roomId: string
   maxParticipants: number
   user: { id: string; displayName: string; avatarUrl: string | null }
 }
@@ -90,6 +93,15 @@ function appendChat(prev: ChatMessage[], message: ChatMessage): ChatMessage[] {
     : next
 }
 
+/** Token-route failure carrying the waiting-room code (if any). */
+class TokenError extends Error {
+  code: string | null
+  constructor(message: string, code: string | null) {
+    super(message)
+    this.code = code
+  }
+}
+
 /** Fetch a short-lived LiveKit token for this room from the server route. */
 async function fetchToken(
   slug: string,
@@ -101,11 +113,23 @@ async function fetchToken(
     body: JSON.stringify({ slug, sessionId }),
   })
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(body.error ?? `token request failed (${res.status})`)
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string
+      code?: string
+    }
+    throw new TokenError(
+      body.error ?? `token request failed (${res.status})`,
+      body.code ?? null,
+    )
   }
   return (await res.json()) as { token: string; url: string }
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// Waiting-room poll cadence and cap (~10 minutes of waiting).
+const APPROVAL_POLL_MS = 4000
+const APPROVAL_MAX_POLLS = 150
 
 /** Parse the server-set participant metadata (see the token route). */
 function parseMetadata(metadata: string | undefined): {
@@ -139,6 +163,7 @@ function parseMetadata(metadata: string | undefined): {
  */
 export function useCall({
   slug,
+  roomId,
   maxParticipants,
   user,
 }: UseCallParams): UseCallReturn {
@@ -163,6 +188,10 @@ export function useCall({
   const [handRaised, setHandRaised] = useState(false)
   // Mirror for event handlers (rebroadcast to newcomers without stale closures).
   const handRaisedRef = useRef(false)
+  // Last-known hand state per remote identity. Hands are rebroadcast whenever
+  // someone joins, so we only toast on a false→true *transition*, not on every
+  // received payload.
+  const remoteHandsRef = useRef<Map<string, boolean>>(new Map())
 
   // Stable identity for this session. The LiveKit identity is a per-session
   // nanoid (minted into the token by the server route) — NOT the user id — so
@@ -296,6 +325,7 @@ export function useCall({
   const removeRemote = useCallback(
     (identity: string) => {
       remoteStreamsRef.current.delete(identity)
+      remoteHandsRef.current.delete(identity)
       remove(identity)
     },
     [remove],
@@ -372,6 +402,9 @@ export function useCall({
             // locally. Our own toggles set audioEnabled *before* the publication
             // mute fires, so this is a no-op for self-initiated mutes.
             media.setAudioEnabled(false)
+          } else if (pub.kind === Track.Kind.Video) {
+            // Same reflection for a host pausing our camera.
+            media.setVideoEnabled(false)
           }
         })
         .on(RoomEvent.TrackUnmuted, (pub: TrackPublication, p: LKParticipant) => {
@@ -397,8 +430,20 @@ export function useCall({
             try {
               const text = new TextDecoder().decode(payload)
               if (topic === HAND_TOPIC) {
-                const { raised } = JSON.parse(text) as { raised?: boolean }
-                patch(p.identity, { handRaised: Boolean(raised) })
+                const raised = Boolean(
+                  (JSON.parse(text) as { raised?: boolean }).raised,
+                )
+                const wasRaised = remoteHandsRef.current.get(p.identity) ?? false
+                remoteHandsRef.current.set(p.identity, raised)
+                patch(p.identity, { handRaised: raised })
+                // Toast only on the false→true transition — hands are
+                // rebroadcast on every newcomer join, and re-toasting those
+                // would spam the whole room.
+                if (raised && !wasRaised) {
+                  toast(`${p.name || 'Someone'} raised their hand`, {
+                    icon: '✋',
+                  })
+                }
                 return
               }
               if (topic !== CHAT_TOPIC) return
@@ -439,6 +484,7 @@ export function useCall({
           videoPubRef.current = null
           screenOwnsVideoPubRef.current = false
           remoteStreamsRef.current.clear()
+          remoteHandsRef.current.clear()
           clearRemote()
           if (reason === DisconnectReason.PARTICIPANT_REMOVED) {
             toast.error('You were removed from the call by the host.')
@@ -510,6 +556,7 @@ export function useCall({
       handRaisedRef.current = false
       setHandRaised(false)
       remoteStreamsRef.current.clear()
+      remoteHandsRef.current.clear()
       media.stopAll()
       reset()
       setChatMessages([])
@@ -528,7 +575,54 @@ export function useCall({
     let token: string
     let url: string
     try {
-      ;({ token, url } = await fetchToken(slug, self.peerId))
+      try {
+        ;({ token, url } = await fetchToken(slug, self.peerId))
+      } catch (err) {
+        if (!(err instanceof TokenError) || !err.code) throw err
+        if (err.code === 'approval_denied') {
+          toast.error('The host declined your request to join.')
+          router.push('/')
+          return
+        }
+        if (err.code === 'approval_required') {
+          // File our request. unique(room_id, user_id) makes this idempotent —
+          // a duplicate-key error just means one already exists.
+          const supabase = createClient()
+          const { error } = await supabase.from('room_join_requests').insert({
+            room_id: roomId,
+            user_id: user.id,
+            display_name: user.displayName.slice(0, MAX_DISPLAY_NAME_LENGTH),
+          })
+          if (error && error.code !== '23505') throw new Error(error.message)
+        }
+        // Poll the token route until the host lets us in (or turns us away).
+        setCallStatus('waiting-approval')
+        let minted: { token: string; url: string } | null = null
+        for (let i = 0; i < APPROVAL_MAX_POLLS; i++) {
+          await sleep(APPROVAL_POLL_MS)
+          if (cancelledRef.current) return
+          try {
+            minted = await fetchToken(slug, self.peerId)
+            break
+          } catch (pollErr) {
+            if (!(pollErr instanceof TokenError)) throw pollErr
+            if (pollErr.code === 'approval_pending') continue
+            if (pollErr.code === 'approval_denied') {
+              toast.error('The host declined your request to join.')
+              router.push('/')
+              return
+            }
+            throw pollErr
+          }
+        }
+        if (!minted) {
+          toast.error("The host hasn't responded yet. Try again in a bit.")
+          setCallStatus('idle')
+          return
+        }
+        ;({ token, url } = minted)
+        setCallStatus('connecting')
+      }
     } catch (err) {
       if (cancelledRef.current) return
       rtcError('Call', 'token fetch failed', err)
@@ -607,6 +701,9 @@ export function useCall({
     rtcLog('Call', `joined room ${slug} as ${self.peerId}`)
   }, [
     slug,
+    roomId,
+    user,
+    router,
     self,
     maxParticipants,
     media,
@@ -762,6 +859,7 @@ export function useCall({
     videoPubRef.current = null
     screenOwnsVideoPubRef.current = false
     remoteStreamsRef.current.clear()
+    remoteHandsRef.current.clear()
     media.stopAll()
     reset()
     router.push('/')

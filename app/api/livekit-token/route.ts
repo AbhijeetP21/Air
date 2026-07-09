@@ -66,15 +66,52 @@ export async function POST(request: Request) {
   // room that lapsed between the page load and join is rejected.
   const { data: room } = await supabase
     .from('rooms')
-    .select('slug, is_active, expires_at')
+    .select('id, slug, is_active, expires_at, created_by, waiting_room')
     .eq('slug', slug)
-    .maybeSingle<Pick<Room, 'slug' | 'is_active' | 'expires_at'>>()
+    .maybeSingle<
+      Pick<
+        Room,
+        'id' | 'slug' | 'is_active' | 'expires_at' | 'created_by' | 'waiting_room'
+      >
+    >()
 
   const isExpired = room?.expires_at
     ? new Date(room.expires_at).getTime() <= Date.now()
     : false
   if (!room || !room.is_active || isExpired) {
     return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+  }
+
+  // Waiting room: non-host joiners need a host-approved request before a token
+  // is minted. The client interprets the `code` — 'approval_required' means
+  // "file a request", 'approval_pending' means "keep polling", and
+  // 'approval_denied' is final for this room session.
+  if (room.waiting_room && room.created_by !== user.id) {
+    const { data: joinRequest } = await supabase
+      .from('room_join_requests')
+      .select('status')
+      .eq('room_id', room.id)
+      .eq('user_id', user.id)
+      .maybeSingle<{ status: 'pending' | 'approved' | 'denied' }>()
+
+    if (!joinRequest) {
+      return NextResponse.json(
+        { error: 'Ask to join first', code: 'approval_required' },
+        { status: 403 },
+      )
+    }
+    if (joinRequest.status === 'pending') {
+      return NextResponse.json(
+        { error: 'Waiting for the host', code: 'approval_pending' },
+        { status: 403 },
+      )
+    }
+    if (joinRequest.status === 'denied') {
+      return NextResponse.json(
+        { error: 'The host declined your request', code: 'approval_denied' },
+        { status: 403 },
+      )
+    }
   }
 
   const displayName = (

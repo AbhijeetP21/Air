@@ -48,9 +48,11 @@ export default async function RoomPage({ params }: RoomPageProps) {
   return (
     <RoomClient
       slug={room.slug}
+      roomId={room.id}
       roomName={room.display_name}
       maxParticipants={room.max_participants}
       hostId={room.created_by}
+      waitingRoom={room.waiting_room}
       user={{ id: user.id, displayName, avatarUrl }}
     />
   )

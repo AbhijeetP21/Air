@@ -48,6 +48,7 @@ export class BackgroundProcessor {
   private segmentation: AnySegmentation = null
   private output: MediaStream | null = null
   private raf = 0
+  private vfc = 0
   private running = false
 
   async start(input: MediaStream): Promise<MediaStreamTrack> {
@@ -75,12 +76,23 @@ export class BackgroundProcessor {
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('Canvas 2D context unavailable')
 
+    // Blur cost scales with pixel area, and it's the most expensive part of
+    // every frame. Blur a quarter-resolution copy (half the radius ≈ the same
+    // visual softness) and scale it back up — ~4x cheaper for the same look.
+    const bgCanvas = document.createElement('canvas')
+    bgCanvas.width = Math.max(1, Math.round(width / 2))
+    bgCanvas.height = Math.max(1, Math.round(height / 2))
+    const bgCtx = bgCanvas.getContext('2d')
+    if (!bgCtx) throw new Error('Canvas 2D context unavailable')
+    bgCtx.filter = `blur(${BLUR_PX / 2}px)`
+
     const segmentation = new SelfieSegmentation({
       locateFile: (file: string) => `${ASSET_PATH}/${file}`,
     })
     segmentation.setOptions({ modelSelection: 1, selfieMode: false })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     segmentation.onResults((results: any) => {
+      bgCtx.drawImage(results.image, 0, 0, bgCanvas.width, bgCanvas.height)
       ctx.save()
       ctx.clearRect(0, 0, width, height)
       // Mask → keep the person, then paint the blurred frame behind them.
@@ -88,8 +100,7 @@ export class BackgroundProcessor {
       ctx.globalCompositeOperation = 'source-in'
       ctx.drawImage(results.image, 0, 0, width, height)
       ctx.globalCompositeOperation = 'destination-over'
-      ctx.filter = `blur(${BLUR_PX}px)`
-      ctx.drawImage(results.image, 0, 0, width, height)
+      ctx.drawImage(bgCanvas, 0, 0, width, height)
       ctx.restore()
     })
 
@@ -98,14 +109,25 @@ export class BackgroundProcessor {
     this.segmentation = segmentation
     this.running = true
 
-    // The output canvas is sampled at FPS, so there's no point segmenting any
-    // faster than that. requestAnimationFrame runs at the display refresh
-    // (often 60Hz+); gate the (CPU-heavy) segment + composite to ~FPS.
+    // Pace segmentation to the *camera's* frames, not the display refresh:
+    // requestVideoFrameCallback fires exactly once per delivered camera frame,
+    // which removes the rAF-beat jitter that made the output stutter. rAF is
+    // the fallback for browsers without rVFC, gated to ~FPS with a small
+    // epsilon so timer jitter can't skip alternate frames (33.2ms < 33.33ms
+    // would otherwise halve the frame rate).
     let lastSent = 0
+    const scheduleNext = () => {
+      if (!this.running || !this.video) return
+      if ('requestVideoFrameCallback' in this.video) {
+        this.vfc = this.video.requestVideoFrameCallback(() => void pump())
+      } else {
+        this.raf = requestAnimationFrame(() => void pump())
+      }
+    }
     const pump = async () => {
       if (!this.running || !this.video) return
       const now = performance.now()
-      if (now - lastSent >= FRAME_INTERVAL_MS) {
+      if (now - lastSent >= FRAME_INTERVAL_MS - 2) {
         lastSent = now
         try {
           await segmentation.send({ image: this.video })
@@ -113,7 +135,7 @@ export class BackgroundProcessor {
           // transient frame error — keep going
         }
       }
-      if (this.running) this.raf = requestAnimationFrame(() => void pump())
+      scheduleNext()
     }
     void pump()
 
@@ -127,6 +149,9 @@ export class BackgroundProcessor {
   stop(): void {
     this.running = false
     if (this.raf) cancelAnimationFrame(this.raf)
+    if (this.vfc && this.video && 'cancelVideoFrameCallback' in this.video) {
+      this.video.cancelVideoFrameCallback(this.vfc)
+    }
     this.output?.getTracks().forEach((t) => t.stop())
     try {
       this.segmentation?.close?.()

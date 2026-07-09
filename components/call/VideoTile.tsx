@@ -99,8 +99,18 @@ export function VideoTile({
       {/* Top-right status: raised hand + connection (remote) + camera-off. */}
       <div className="absolute right-2 top-2 flex items-center gap-1.5">
         {participant.handRaised && (
-          <span className="rounded-md bg-primary/90 p-1 backdrop-blur">
-            <Hand className="size-3.5 text-primary-foreground" />
+          <span
+            className={cn(
+              'flex animate-bounce items-center gap-1 rounded-md bg-primary p-1.5 shadow-lg',
+              !compact && 'px-2',
+            )}
+          >
+            <Hand className="size-4 text-primary-foreground" />
+            {!compact && (
+              <span className="text-xs font-medium text-primary-foreground">
+                Hand raised
+              </span>
+            )}
           </span>
         )}
         {!participant.videoEnabled && (

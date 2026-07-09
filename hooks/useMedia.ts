@@ -116,6 +116,23 @@ export function useMedia() {
   }, [manager])
 
   /**
+   * Force the camera to a specific state. Used when the SFU pauses our video
+   * from the outside (a host action), so the local UI reflects reality. No-op
+   * if already in that state.
+   */
+  const setVideoEnabled = useCallback(
+    (enabled: boolean) => {
+      if (!manager.hasVideo()) return
+      setMediaState((prev) => {
+        if (prev.videoEnabled === enabled) return prev
+        manager.setTrackEnabled('video', enabled)
+        return { ...prev, videoEnabled: enabled }
+      })
+    },
+    [manager],
+  )
+
+  /**
    * Flip between front and rear camera (mobile). Returns the new video track so
    * the caller can swap it on its peer connections.
    */
@@ -164,6 +181,7 @@ export function useMedia() {
     acquireLocalStream,
     toggleAudio,
     setAudioEnabled,
+    setVideoEnabled,
     toggleVideo,
     switchCamera,
     toggleNoiseSuppression,

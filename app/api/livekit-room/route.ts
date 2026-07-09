@@ -6,7 +6,7 @@
 // be the room's creator; that's enforced against the DB on every request, so a
 // forged body can't grant moderation rights.
 
-import { RoomServiceClient, TrackType } from 'livekit-server-sdk'
+import { RoomServiceClient, TrackSource, TrackType } from 'livekit-server-sdk'
 import { NextResponse } from 'next/server'
 
 import { createServerClient } from '@/lib/supabase/server'
@@ -16,7 +16,7 @@ import type { Room } from '@/types'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-type Action = 'mute' | 'remove' | 'mute-all'
+type Action = 'mute' | 'mute-video' | 'remove' | 'mute-all'
 
 /** LiveKit's server API speaks https, but the public URL is a wss endpoint. */
 function httpHost(wssUrl: string): string {
@@ -54,7 +54,12 @@ export async function POST(request: Request) {
   if (typeof slug !== 'string' || !slug) {
     return NextResponse.json({ error: 'Missing room slug' }, { status: 400 })
   }
-  if (action !== 'mute' && action !== 'remove' && action !== 'mute-all') {
+  if (
+    action !== 'mute' &&
+    action !== 'mute-video' &&
+    action !== 'remove' &&
+    action !== 'mute-all'
+  ) {
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
   }
 
@@ -62,9 +67,9 @@ export async function POST(request: Request) {
   // we compare created_by explicitly rather than trusting the client.
   const { data: room } = await supabase
     .from('rooms')
-    .select('slug, created_by')
+    .select('id, slug, created_by')
     .eq('slug', slug)
-    .maybeSingle<Pick<Room, 'slug' | 'created_by'>>()
+    .maybeSingle<Pick<Room, 'id' | 'slug' | 'created_by'>>()
   if (!room) {
     return NextResponse.json({ error: 'Room not found' }, { status: 404 })
   }
@@ -79,12 +84,29 @@ export async function POST(request: Request) {
       if (typeof targetIdentity !== 'string' || !targetIdentity) {
         return NextResponse.json({ error: 'Missing target' }, { status: 400 })
       }
+      // Read the participant *before* removal to learn their trusted userId,
+      // then mark any join request denied so a kicked user can't immediately
+      // re-enter a waiting-room-enabled room.
+      const info = await svc.getParticipant(slug, targetIdentity)
       await svc.removeParticipant(slug, targetIdentity)
+      const targetUserId = metadataUserId(info.metadata)
+      if (targetUserId) {
+        await supabase
+          .from('room_join_requests')
+          .update({ status: 'denied' })
+          .eq('room_id', room.id)
+          .eq('user_id', targetUserId)
+      }
     } else if (action === 'mute') {
       if (typeof targetIdentity !== 'string' || !targetIdentity) {
         return NextResponse.json({ error: 'Missing target' }, { status: 400 })
       }
       await muteParticipantAudio(svc, slug, targetIdentity)
+    } else if (action === 'mute-video') {
+      if (typeof targetIdentity !== 'string' || !targetIdentity) {
+        return NextResponse.json({ error: 'Missing target' }, { status: 400 })
+      }
+      await muteParticipantVideo(svc, slug, targetIdentity)
     } else {
       // mute-all: mute everyone except the host (the caller). Identities are
       // per-session ids, so the host is recognised by the userId in the
@@ -125,5 +147,23 @@ async function muteParticipantAudio(
   const audio = info.tracks.find((t) => t.type === TrackType.AUDIO)
   if (audio && !audio.muted) {
     await svc.mutePublishedTrack(room, identity, audio.sid, true)
+  }
+}
+
+/** Pause a participant's camera track, if they have one publishing. */
+async function muteParticipantVideo(
+  svc: RoomServiceClient,
+  room: string,
+  identity: string,
+): Promise<void> {
+  const info = await svc.getParticipant(room, identity)
+  // Prefer the camera; fall back to any video so screen-carried publications
+  // (a camera-less user sharing their screen) can still be paused.
+  const video =
+    info.tracks.find(
+      (t) => t.type === TrackType.VIDEO && t.source === TrackSource.CAMERA,
+    ) ?? info.tracks.find((t) => t.type === TrackType.VIDEO)
+  if (video && !video.muted) {
+    await svc.mutePublishedTrack(room, identity, video.sid, true)
   }
 }
