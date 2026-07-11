@@ -47,6 +47,7 @@ export class BackgroundProcessor {
   private canvas: HTMLCanvasElement | null = null
   private segmentation: AnySegmentation = null
   private output: MediaStream | null = null
+  private sourceTrack: MediaStreamTrack | null = null
   private raf = 0
   private vfc = 0
   private running = false
@@ -54,6 +55,7 @@ export class BackgroundProcessor {
   async start(input: MediaStream): Promise<MediaStreamTrack> {
     const track = input.getVideoTracks()[0]
     if (!track) throw new Error('No video track to process')
+    this.sourceTrack = track
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SelfieSegmentation = (await loadSelfieSegmentation()) as any
@@ -127,7 +129,15 @@ export class BackgroundProcessor {
     const pump = async () => {
       if (!this.running || !this.video) return
       const now = performance.now()
-      if (now - lastSent >= FRAME_INTERVAL_MS - 2) {
+      // Skip the (expensive) segmentation while the camera is disabled — a
+      // paused/backgrounded camera only delivers black frames, and its LiveKit
+      // publication is muted so remotes already see the avatar. Segmenting them
+      // would burn CPU/GPU for no visible output. Keep scheduling cheaply so we
+      // resume the instant the camera comes back.
+      if (
+        this.sourceTrack?.enabled !== false &&
+        now - lastSent >= FRAME_INTERVAL_MS - 2
+      ) {
         lastSent = now
         try {
           await segmentation.send({ image: this.video })
@@ -163,6 +173,7 @@ export class BackgroundProcessor {
     this.canvas = null
     this.segmentation = null
     this.output = null
+    this.sourceTrack = null
   }
 }
 

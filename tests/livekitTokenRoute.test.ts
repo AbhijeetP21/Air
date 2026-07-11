@@ -13,6 +13,7 @@ import {
 const h = vi.hoisted(() => ({
   supabase: null as any,
   tokens: [] as any[],
+  participants: [] as any[],
 }))
 
 vi.mock('@/lib/env', () => ({
@@ -40,6 +41,9 @@ vi.mock('livekit-server-sdk', () => ({
       return 'test-jwt'
     }
   },
+  RoomServiceClient: class {
+    listParticipants = vi.fn(async () => h.participants)
+  },
 }))
 
 import { POST } from '@/app/api/livekit-token/route'
@@ -56,6 +60,7 @@ const activeRoom = (overrides: Record<string, unknown> = {}) => ({
   created_by: HOST_ID,
   waiting_room: false,
   broadcast: false,
+  max_participants: 50,
   ...overrides,
 })
 
@@ -78,6 +83,7 @@ const joiner = { id: JOINER_ID, email: 'joiner@example.com' }
 
 beforeEach(() => {
   h.tokens.length = 0
+  h.participants.length = 0
   vi.stubEnv('LIVEKIT_API_KEY', 'test-key')
   vi.stubEnv('LIVEKIT_API_SECRET', 'test-secret')
 })
@@ -234,6 +240,40 @@ describe('livekit-token route', () => {
     })
     const res = await post({ slug: 'testroom', sessionId: SESSION_ID })
     expect(res.status).toBe(200)
+  })
+
+  describe('capacity', () => {
+    it('403s room_full when the SFU is already at max_participants', async () => {
+      h.participants = [{ identity: 'a' }, { identity: 'b' }]
+      useState({
+        user: joiner,
+        tables: { rooms: { select: { data: activeRoom({ max_participants: 2 }) } } },
+      })
+      const res = await post({ slug: 'testroom', sessionId: SESSION_ID })
+      expect(res.status).toBe(403)
+      expect((await res.json()).code).toBe('room_full')
+      expect(h.tokens).toHaveLength(0)
+    })
+
+    it('admits when there is still room', async () => {
+      h.participants = [{ identity: 'a' }]
+      useState({
+        user: joiner,
+        tables: { rooms: { select: { data: activeRoom({ max_participants: 2 }) } } },
+      })
+      const res = await post({ slug: 'testroom', sessionId: SESSION_ID })
+      expect(res.status).toBe(200)
+    })
+
+    it('exempts the host from the capacity cap', async () => {
+      h.participants = [{ identity: 'a' }, { identity: 'b' }]
+      useState({
+        user: { id: HOST_ID, email: 'host@example.com' },
+        tables: { rooms: { select: { data: activeRoom({ max_participants: 2 }) } } },
+      })
+      const res = await post({ slug: 'testroom', sessionId: SESSION_ID })
+      expect(res.status).toBe(200)
+    })
   })
 
   describe('broadcast rooms', () => {

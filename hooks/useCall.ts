@@ -771,6 +771,12 @@ export function useCall({
         ;({ token, url } = await fetchToken(slug, self.peerId))
       } catch (err) {
         if (!(err instanceof TokenError) || !err.code) throw err
+        if (err.code === 'room_full') {
+          // Server enforced capacity (a modified client can't slip past it).
+          setRoomFull(true)
+          setCallStatus('idle')
+          return
+        }
         if (err.code === 'approval_denied') {
           toast.error('The host declined your request to join.')
           router.push('/')

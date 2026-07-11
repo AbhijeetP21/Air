@@ -43,8 +43,15 @@ export function sanitizeNotesSignal(value: unknown): NotesSignal | null {
     if (typeof raw.text !== 'string') return null
     const text = cleanTranscriptText(raw.text.slice(0, MAX_LINE_LENGTH))
     if (!text) return null
-    const at = Number(raw.at)
-    return { kind: 'line', text, at: Number.isFinite(at) ? at : Date.now() }
+    // Untrusted timestamp: clamp to (0, now]. A future `at` must not be able to
+    // reorder the shared transcript or render a bogus clock — same rule the
+    // raised-hand queue applies. Missing/broken falls back to now.
+    const rawAt = Number(raw.at)
+    const at =
+      Number.isFinite(rawAt) && rawAt > 0
+        ? Math.min(rawAt, Date.now())
+        : Date.now()
+    return { kind: 'line', text, at }
   }
   return null
 }
@@ -68,12 +75,24 @@ export function cleanTranscriptText(raw: string): string {
   return collapsed
 }
 
-/** Append a line, keeping at most MAX_TRANSCRIPT_LINES (drops oldest). */
+/**
+ * Insert a line in chronological (`at`) order, keeping at most
+ * MAX_TRANSCRIPT_LINES (drops oldest). Lines from different peers arrive
+ * interleaved over the network, so appending by receipt order would misorder
+ * the transcript (and its export's start time). We scan from the end — lines
+ * almost always arrive in order, making this O(1) amortized — and place
+ * out-of-order arrivals by timestamp. Ties keep arrival order (stable).
+ */
 export function appendTranscriptLine(
   prev: TranscriptLine[],
   line: TranscriptLine,
 ): TranscriptLine[] {
-  const next = [...prev, line]
+  let i = prev.length
+  while (i > 0 && prev[i - 1]!.at > line.at) i--
+  const next =
+    i === prev.length
+      ? [...prev, line]
+      : [...prev.slice(0, i), line, ...prev.slice(i)]
   return next.length > MAX_TRANSCRIPT_LINES
     ? next.slice(next.length - MAX_TRANSCRIPT_LINES)
     : next

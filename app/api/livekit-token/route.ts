@@ -10,7 +10,7 @@
 
 import { createHmac } from 'node:crypto'
 
-import { AccessToken } from 'livekit-server-sdk'
+import { AccessToken, RoomServiceClient } from 'livekit-server-sdk'
 import { NextResponse } from 'next/server'
 
 import { createServerClient } from '@/lib/supabase/server'
@@ -22,6 +22,11 @@ import type { Room } from '@/types'
 // Edge) and never cache: the response is per-user and auth-gated.
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+/** LiveKit's server API speaks https, but the public URL is a wss endpoint. */
+function httpHost(wssUrl: string): string {
+  return wssUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')
+}
 
 export async function POST(request: Request) {
   const apiKey = process.env.LIVEKIT_API_KEY
@@ -72,7 +77,14 @@ export async function POST(request: Request) {
   })) as {
     data: Pick<
       Room,
-      'id' | 'slug' | 'is_active' | 'expires_at' | 'created_by' | 'waiting_room' | 'broadcast'
+      | 'id'
+      | 'slug'
+      | 'is_active'
+      | 'expires_at'
+      | 'created_by'
+      | 'waiting_room'
+      | 'broadcast'
+      | 'max_participants'
     > | null
   }
 
@@ -115,6 +127,27 @@ export async function POST(request: Request) {
           { status: 403 },
         )
       }
+    }
+  }
+
+  // Server-side capacity enforcement. The client has its own guard, but a
+  // modified client could ignore it, so count the real participants on the SFU
+  // and refuse once the room is full. Best-effort: if the room doesn't exist
+  // yet (nobody has joined) or LiveKit is briefly unreachable, this fails open
+  // and the client-side guard remains the backstop. The host is exempt so they
+  // can always get into their own room.
+  if (!isHost && room.max_participants) {
+    try {
+      const svc = new RoomServiceClient(httpHost(LIVEKIT_URL), apiKey, apiSecret)
+      const existing = await svc.listParticipants(room.slug)
+      if (existing.length >= room.max_participants) {
+        return NextResponse.json(
+          { error: 'Room is full', code: 'room_full' },
+          { status: 403 },
+        )
+      }
+    } catch {
+      // Room not provisioned yet or a transient LiveKit error — don't block.
     }
   }
 
