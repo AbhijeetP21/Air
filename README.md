@@ -15,16 +15,27 @@ Air is the large-room sibling to [**Pact**](https://github.com/AbhijeetP21/Pact)
 
 ## Features
 
+**Calling**
 - Google OAuth and magic-link sign-in (Supabase)
 - Create a room, share a link, join instantly
 - Pre-join lobby with camera and mic preview, plus noise and blur toggles
-- Responsive participant grid with per-tile speaking indicators and connection status
-- Mic, camera, screen share, and leave controls
+- Adaptive, paginated participant grid with per-tile speaking indicators and connection status; spotlight any tile
+- Selective subscription — video is pulled only for the participants on screen, so a 50-person room never streams 50 upstreams at once (audio stays subscribed for everyone)
+- Mic, camera, screen share, camera flip (front/rear), and leave controls
 - Live mic and camera state across the room, so you can see when someone mutes
-- Session chat over LiveKit data channels — lives only for the call, disappears when it ends
+- Session chat over LiveKit data channels — lives only for the call, disappears when it ends; paste an image to share it
+
+**Hosting & moderation**
+- **Waiting room** — the host approves join requests (approve, deny, admit-all), with a re-admit list so an accidental deny or removal is recoverable
+- **Host controls** — force-mute, pause video, remove a participant, and mute-everyone; removals are durable (a kicked user can't rejoin by reloading)
+- **Broadcast mode** — one-to-many rooms where only the host publishes A/V and everyone else joins as a chat-only viewer (no camera/mic prompt)
+- **Raise hand** — a shared, fairly ordered (first-raised-first) hand queue visible to the whole room
+
+**On-device intelligence & privacy**
+- **AI notes** — opt-in, consent-announced live transcription and meeting summaries that run entirely in the browser. Each participant's speech is transcribed on their own device (Whisper via transformers.js, WebGPU with a WASM fallback) and only the resulting text lines are shared; the summary model (WebLLM / the browser's built-in Prompt API) runs in-tab. Audio never leaves the machine, and the transcript exports to Markdown.
 - On-device background blur (MediaPipe selfie segmentation)
 - On-device RNNoise suppression, optional and off by default
-- Dynacast so the publisher pauses simulcast layers no one is watching (adaptive stream + pagination land in the scale phase)
+- Dynacast so the publisher pauses simulcast layers no one is watching
 
 A note on noise suppression: the browser's native suppression is light and always on. RNNoise is a heavier ML pass that can strain a slower machine and introduce robotic artifacts for the people listening, so it stays off by default and is there if you want it.
 
@@ -37,7 +48,10 @@ A note on noise suppression: the browser's native suppression is light and alway
 | SFU | LiveKit — `livekit-client` (browser) + `livekit-server-sdk` (token minting) |
 | Noise suppression | `@sapphi-red/web-noise-suppressor` (RNNoise WASM AudioWorklet) |
 | Background blur | `@mediapipe/selfie_segmentation` (self-hosted WASM) |
-| Backend | Supabase: Auth, PostgreSQL with RLS (rooms) |
+| Transcription | `@huggingface/transformers` (Whisper, WebGPU/WASM, in a worker) |
+| Summarization | `@mlc-ai/web-llm` (WebGPU) or the browser's built-in Prompt API |
+| Backend | Supabase: Auth, PostgreSQL with RLS (rooms, join requests) |
+| Tests | Vitest (call logic, API routes, notes protocol, grid math) |
 | Deploy | Vercel + LiveKit Cloud |
 
 ## Architecture
@@ -94,7 +108,13 @@ The app validates required variables on startup and throws a descriptive error i
 
 ### 3. Set up Supabase
 
-1. **Run the migrations.** In the Supabase SQL Editor, run [`supabase/migrations/20240001_initial.sql`](supabase/migrations/20240001_initial.sql) (creates the `rooms` table + RLS), then [`supabase/migrations/20240002_large_rooms.sql`](supabase/migrations/20240002_large_rooms.sql) (raises the participant cap to 50, ceiling 100).
+1. **Run the migrations, in order.** In the Supabase SQL Editor, run each file in [`supabase/migrations/`](supabase/migrations) from oldest to newest:
+   - `20240001_initial.sql` — `rooms` table + RLS
+   - `20240002_large_rooms.sql` — raises the participant cap to 50 (ceiling 100)
+   - `20240003_waiting_room.sql` — `room_join_requests` table + the waiting-room flag
+   - `20240004_broadcast.sql` — the broadcast-room flag
+   - `20240005_security_hardening.sql` — owner-only room reads + a `get_active_room_by_slug` lookup, and durable-ban policies
+   - `20240006_readmit.sql` — lets a host lift a ban (re-admit)
 2. **Auth, URL Configuration.** Set Site URL to `http://localhost:3000` and add `http://localhost:3000/**` to Redirect URLs.
 3. **Magic link** works out of the box. For **Google OAuth** (optional), create a Google Cloud OAuth client with redirect `https://<project-ref>.supabase.co/auth/v1/callback`, then enable Google under Auth, Providers.
 
@@ -124,6 +144,8 @@ npm run build       # production build
 npm run start       # serve the production build
 npm run lint        # ESLint
 npm run typecheck   # tsc --noEmit
+npm test            # Vitest (run once)
+npm run test:watch  # Vitest (watch mode)
 ```
 
 ## Deploy to Vercel
@@ -139,13 +161,16 @@ npm run typecheck   # tsc --noEmit
 app/
   (auth)/login, (auth)/auth/callback   Auth UI and OAuth/magic-link callback
   room/new, room/[slug]                Create and join rooms
-  api/livekit-token                    Server-side LiveKit token minting (auth-gated)
-components/call/                        VideoTile, ParticipantGrid, ControlBar, ChatPanel, ...
+  api/livekit-token                    Server-side token minting (auth, ban, and capacity gated)
+  api/livekit-room                     Host moderation (mute, remove, mute-all) via the LiveKit server API
+components/call/                        VideoTile, PaginatedGrid, ControlBar, ChatPanel, ParticipantsPanel, NotesPanel, ...
 lib/webrtc/                             MediaManager, NoiseSuppressor, BackgroundProcessor
-hooks/                                  useCall (LiveKit), useMedia, useParticipants, useAudioLevel
+lib/notes/                              On-device transcription + summary (audio VAD, Whisper worker, WebLLM, export)
+hooks/                                  useCall (LiveKit), useMedia, useParticipants, useWaitingRoom, useAudioLevel
 lib/supabase/                           Browser and server clients (@supabase/ssr)
 middleware.ts                          Protects /room/* routes
-supabase/migrations/                   rooms table, RLS, and large-room cap
+supabase/migrations/                   rooms, join requests, RLS, waiting room, broadcast, security hardening
+tests/                                  Vitest suite (routes, call logic, notes, grid)
 public/noise/                          RNNoise worklet and WASM
 public/mediapipe/                      Selfie segmentation model and WASM
 ```
@@ -155,10 +180,15 @@ public/mediapipe/                      Selfie segmentation model and WASM
 - The token route is auth-gated and verifies room membership before minting.
 - `LIVEKIT_API_SECRET` is server-only and never enters the client bundle.
 - All DB access goes through the authenticated Supabase client; RLS enforces room access.
+- **Rooms are readable only by their creator.** Join-by-link resolves a slug through a `SECURITY DEFINER` function that returns only the exact-slug row, so no one can enumerate rooms or harvest slugs.
 - Room slugs are `nanoid`-generated, so they are non-guessable and non-sequential.
+- **LiveKit identities are namespaced per user** (an HMAC tag over the user id), so no participant can present another's identity to force them off the SFU.
+- **Removals and denials are durable.** A kicked or denied user is refused a fresh token unconditionally — reloading doesn't get them back in — and only the host can lift the ban (re-admit).
+- **Capacity is enforced server-side.** The token route counts real SFU participants and refuses once the room is full, so a modified client can't exceed the cap.
+- Every inbound data-channel payload (chat, hand, notes) is treated as untrusted: length-capped, sanitized, and attributed to the SFU-verified sender, never to a field in the payload.
 - Middleware protects all `/room/*` routes.
 - The UI is honest that media is server-relayed, not peer-to-peer private.
-- Chat is ephemeral — never written to a database, gone when the call ends.
+- Chat and transcripts are ephemeral — never written to a database, gone when the call ends. AI transcription and summarization run entirely on participants' devices; audio is never uploaded.
 - Display names are trimmed and length-capped.
 
 ## License
