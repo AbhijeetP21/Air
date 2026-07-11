@@ -72,6 +72,15 @@ export function ParticipantsPanel({
     return participants.filter((p) => p.displayName.toLowerCase().includes(q))
   }, [participants, query])
 
+  // Raised-hand queue positions: first raised, first served. Lets the host
+  // take questions in fair order at a glance.
+  const handQueue = useMemo(() => {
+    const raised = participants
+      .filter((p) => p.handRaised)
+      .sort((a, b) => (a.handRaisedAt ?? 0) - (b.handRaisedAt ?? 0))
+    return new Map(raised.map((p, i) => [p.peerId, i + 1]))
+  }, [participants])
+
   if (!open) return null
 
   return (
@@ -247,7 +256,20 @@ export function ParticipantsPanel({
 
                   {/* Status glyphs. */}
                   <div className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-                    {p.handRaised && <Hand className="size-4 text-primary" />}
+                    {p.handRaised && (
+                      <span
+                        className="flex items-center gap-0.5 text-primary"
+                        title={`Hand raised — #${handQueue.get(p.peerId)} in queue`}
+                      >
+                        <Hand className="size-4" />
+                        {(handQueue.get(p.peerId) ?? 0) >= 1 &&
+                          handQueue.size > 1 && (
+                            <span className="text-xs font-semibold tabular-nums">
+                              #{handQueue.get(p.peerId)}
+                            </span>
+                          )}
+                      </span>
+                    )}
                     {!p.audioEnabled && (
                       <MicOff className="size-4 text-red-400" />
                     )}

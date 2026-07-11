@@ -175,8 +175,8 @@ export function NotesPanel({
 
         {notesRunning && !canTranscribe && (
           <p className="text-xs text-muted-foreground">
-            This device can&apos;t transcribe (needs a desktop browser), but
-            you&apos;ll still see everyone else&apos;s lines here.
+            This device can&apos;t transcribe, but everyone else&apos;s lines
+            still appear here.
           </p>
         )}
 

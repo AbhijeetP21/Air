@@ -50,6 +50,8 @@ export type RoomClientProps = {
   hostId: string
   /** rooms.waiting_room at page load. */
   waitingRoom: boolean
+  /** Broadcast room: only the host publishes; everyone else views. */
+  broadcast: boolean
   user: {
     id: string
     displayName: string
@@ -97,6 +99,7 @@ function CallExperience({
   maxParticipants,
   hostId,
   waitingRoom,
+  broadcast,
   user,
 }: RoomClientProps) {
   const {
@@ -108,6 +111,9 @@ function CallExperience({
     selfPeerId,
     chatMessages,
     sendChat,
+    isViewer,
+    audienceChatAll,
+    setAudienceChat,
     handRaised,
     toggleHand,
     transcript,
@@ -127,7 +133,7 @@ function CallExperience({
     startScreenShare,
     stopScreenShare,
     leaveCall,
-  } = useCall({ slug, roomId, maxParticipants, user })
+  } = useCall({ slug, roomId, maxParticipants, hostId, broadcast, user })
 
   const isHost = user.id === hostId
 
@@ -182,6 +188,14 @@ function CallExperience({
   // AI notes panel (same right rail, mutually exclusive with the others).
   const [notesOpen, setNotesOpen] = useState(false)
   const notesRunning = notesEnabled || noteTakers.length > 0
+
+  // Surface a broken speech engine once — otherwise the only trace is a
+  // silent transcript and a small line inside the panel.
+  useEffect(() => {
+    if (transcriberStatus === 'error') {
+      toast.error("The speech model couldn't start, so this device won't contribute transcript lines.")
+    }
+  }, [transcriberStatus])
 
   // ---- Back-gesture guard -------------------------------------------------
   // On phones a back swipe fires history-back, which used to silently kick the
@@ -289,29 +303,40 @@ function CallExperience({
     }
   }
 
+  // Broadcast rooms stage only the host — a wall of silent viewer avatars
+  // helps no one. The full roster stays available to the host via the panel.
+  const stagedParticipants = useMemo(
+    () => (broadcast ? participants.filter((p) => p.userId === hostId) : participants),
+    [broadcast, participants, hostId],
+  )
+
   const isSpotlight =
     focusedPeerId !== null &&
-    participants.some((p) => p.peerId === focusedPeerId)
+    stagedParticipants.some((p) => p.peerId === focusedPeerId)
 
-  const usesPagination = participants.length > SMALL_ROOM_MAX
+  const usesPagination = stagedParticipants.length > SMALL_ROOM_MAX
 
   // For large rooms, order by recent speaker (local always first) so the most
   // relevant people land on page 1. Small rooms keep the stable roster order to
   // avoid tiles hopping around.
   const orderedParticipants = useMemo(() => {
-    if (!usesPagination) return participants
-    return [...participants].sort((a, b) => {
+    if (!usesPagination) return stagedParticipants
+    return [...stagedParticipants].sort((a, b) => {
       if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1
-      // Raised hands surface to page 1 so the host actually sees them.
+      // Raised hands surface to page 1 so the host actually sees them —
+      // ordered by who raised first, so the queue is fair.
       const ah = a.handRaised ? 1 : 0
       const bh = b.handRaised ? 1 : 0
       if (ah !== bh) return bh - ah
+      if (a.handRaised && b.handRaised) {
+        return (a.handRaisedAt ?? 0) - (b.handRaisedAt ?? 0)
+      }
       const at = a.lastSpokeAt ?? 0
       const bt = b.lastSpokeAt ?? 0
       if (at !== bt) return bt - at
       return a.peerId.localeCompare(b.peerId)
     })
-  }, [participants, usesPagination])
+  }, [stagedParticipants, usesPagination])
 
   // In spotlight, cap the filmstrip: the focused tile plus the top-N others.
   const spotlightParticipants = useMemo(() => {
@@ -328,9 +353,9 @@ function CallExperience({
   const [pageVisibleIds, setPageVisibleIds] = useState<string[]>([])
   const visibleIds = useMemo(() => {
     if (isSpotlight) return spotlightParticipants.map((p) => p.peerId)
-    if (!usesPagination) return participants.map((p) => p.peerId)
+    if (!usesPagination) return stagedParticipants.map((p) => p.peerId)
     return pageVisibleIds
-  }, [isSpotlight, usesPagination, spotlightParticipants, participants, pageVisibleIds])
+  }, [isSpotlight, usesPagination, spotlightParticipants, stagedParticipants, pageVisibleIds])
 
   const visibleKey = visibleIds.join(',')
   useEffect(() => {
@@ -396,17 +421,22 @@ function CallExperience({
               {roomName ?? 'Private room'}
             </h1>
             <p className="text-sm text-muted-foreground">
-              Ready when you are, {user.displayName}.
+              {isViewer
+                ? 'This is a broadcast — you’ll watch and listen, and can ask questions in chat. Your camera and microphone stay off.'
+                : `Ready when you are, ${user.displayName}.`}
             </p>
           </div>
 
-          <LocalPreview
-            mediaState={mediaState}
-            displayName={user.displayName}
-            avatarUrl={user.avatarUrl}
-            onToggleAudio={toggleAudio}
-            onToggleVideo={toggleVideo}
-          />
+          {/* Viewers have no local media to preview. */}
+          {!isViewer && (
+            <LocalPreview
+              mediaState={mediaState}
+              displayName={user.displayName}
+              avatarUrl={user.avatarUrl}
+              onToggleAudio={toggleAudio}
+              onToggleVideo={toggleVideo}
+            />
+          )}
 
           {roomFull ? (
             <div className="space-y-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-center">
@@ -424,7 +454,7 @@ function CallExperience({
           ) : (
             <>
               {/* Effects are CPU-heavy; hidden on mobile to protect battery. */}
-              {!isMobile && (
+              {!isViewer && !isMobile && (
                 <div className="space-y-2">
                   <LobbyToggle
                     icon={<AudioLines className="size-4 text-primary" />}
@@ -448,7 +478,7 @@ function CallExperience({
                 className="h-12 w-full text-base"
                 onClick={() => void join()}
               >
-                Join call
+                {isViewer ? 'Join broadcast' : 'Join call'}
                 <ArrowRight className="size-4" />
               </Button>
             </>
@@ -470,6 +500,12 @@ function CallExperience({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {broadcast && (
+            <Badge variant="outline" className="gap-1.5">
+              <span className="inline-block size-1.5 animate-pulse rounded-full bg-red-500" />
+              Broadcast
+            </Badge>
+          )}
           {/* Consent indicator: visible to everyone while notes run anywhere. */}
           {notesRunning && (
             <Badge
@@ -552,7 +588,7 @@ function CallExperience({
             />
           ) : (
             <ParticipantGrid
-              participants={participants}
+              participants={stagedParticipants}
               mirrorLocal={mirrorLocal}
               localSpeaking={localSpeaking}
               onFocus={setFocusedPeerId}
@@ -568,6 +604,7 @@ function CallExperience({
         chatUnread={chatUnread}
         isMobile={isMobile}
         canScreenShare={canScreenShare}
+        viewer={isViewer}
         onToggleAudio={toggleAudio}
         onToggleVideo={toggleVideo}
         onFlipCamera={() => void switchCamera()}
@@ -606,6 +643,10 @@ function CallExperience({
         messages={chatMessages}
         selfPeerId={selfPeerId}
         onSend={sendChat}
+        broadcast={broadcast}
+        isHost={isHost}
+        audienceChatAll={audienceChatAll}
+        onToggleAudienceChat={setAudienceChat}
       />
 
       <NotesPanel
@@ -623,7 +664,7 @@ function CallExperience({
       />
 
       <ParticipantsPanel
-        open={participantsOpen}
+        open={participantsOpen && !isViewer}
         onClose={() => setParticipantsOpen(false)}
         participants={participants}
         selfPeerId={selfPeerId}

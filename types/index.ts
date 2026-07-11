@@ -11,6 +11,8 @@ export interface Room {
   is_active: boolean
   /** When true, non-host joiners need host approval before receiving a token. */
   waiting_room: boolean
+  /** When true, only the host publishes A/V; everyone else joins as a viewer. */
+  broadcast: boolean
 }
 
 /** A pending request to join a waiting-room-enabled room. */
@@ -41,6 +43,11 @@ export interface Participant {
   lastSpokeAt?: number
   /** Whether this participant has a raised hand (broadcast over a data channel). */
   handRaised?: boolean
+  /**
+   * Epoch ms of when the hand went up (carried in the broadcast). Orders the
+   * queue first-raised-first so hosts can take questions fairly.
+   */
+  handRaisedAt?: number
 }
 
 /** A pasted image attached to a chat message (compressed JPEG data URL). */
@@ -56,6 +63,9 @@ export type ChatMessage = {
   displayName: string
   text: string // may be '' for an image-only message
   image?: ChatImage // optional pasted image (one per message)
+  /** Broadcast rooms: 'host' marks a private question to the host (delivery is
+   * scoped at send time via destinationIdentities; this is the display label). */
+  to?: 'host'
   at: number // epoch ms — when it was sent
 }
 

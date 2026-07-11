@@ -55,6 +55,7 @@ const activeRoom = (overrides: Record<string, unknown> = {}) => ({
   expires_at: null,
   created_by: HOST_ID,
   waiting_room: false,
+  broadcast: false,
   ...overrides,
 })
 
@@ -182,6 +183,40 @@ describe('livekit-token route', () => {
     })
     await post({ slug: 'testroom', sessionId: SESSION_ID })
     expect(h.tokens[0].opts.name).toBe('ada.lovelace')
+  })
+
+  describe('broadcast rooms', () => {
+    it('denies publish to non-hosts (enforced in the grant, not just UI)', async () => {
+      useState({
+        user: joiner,
+        tables: { rooms: { select: { data: activeRoom({ broadcast: true }) } } },
+      })
+      const res = await post({ slug: 'testroom', sessionId: SESSION_ID })
+      expect(res.status).toBe(200)
+      expect(h.tokens[0].grants[0]).toMatchObject({
+        canPublish: false,
+        canPublishData: true, // chat stays open
+        canSubscribe: true,
+      })
+    })
+
+    it('grants publish to the host', async () => {
+      useState({
+        user: { id: HOST_ID, email: 'host@example.com' },
+        tables: { rooms: { select: { data: activeRoom({ broadcast: true }) } } },
+      })
+      await post({ slug: 'testroom', sessionId: SESSION_ID })
+      expect(h.tokens[0].grants[0]).toMatchObject({ canPublish: true })
+    })
+
+    it('grants publish to everyone in a normal room', async () => {
+      useState({
+        user: joiner,
+        tables: { rooms: { select: { data: activeRoom() } } },
+      })
+      await post({ slug: 'testroom', sessionId: SESSION_ID })
+      expect(h.tokens[0].grants[0]).toMatchObject({ canPublish: true })
+    })
   })
 
   describe('waiting room', () => {

@@ -8,13 +8,17 @@
 
 import { pipeline, env } from '@huggingface/transformers'
 
-// Small enough to download in seconds, strong enough for meeting speech.
-const MODEL_ID = 'onnx-community/whisper-base'
+// base: strong enough for meeting speech, downloads in seconds on desktop.
+// tiny: 5x smaller and much cooler to run — what phones use.
+const MODEL_IDS = {
+  tiny: 'onnx-community/whisper-tiny',
+  base: 'onnx-community/whisper-base',
+} as const
 
 env.allowLocalModels = false
 
 type InMessage =
-  | { type: 'load' }
+  | { type: 'load'; model?: keyof typeof MODEL_IDS }
   | { type: 'transcribe'; id: number; audio: Float32Array }
 
 type AsrPipeline = (
@@ -28,6 +32,7 @@ const scope = globalThis as unknown as {
 }
 
 let asrPromise: Promise<AsrPipeline> | null = null
+let modelId: string = MODEL_IDS.base
 // Serialize jobs — the pipeline is single-instance and decode is stateful.
 let queue: Promise<void> = Promise.resolve()
 
@@ -41,7 +46,7 @@ function loadAsr(): Promise<AsrPipeline> {
     }
     try {
       if (!scope.navigator?.gpu) throw new Error('WebGPU unavailable')
-      return (await pipeline('automatic-speech-recognition', MODEL_ID, {
+      return (await pipeline('automatic-speech-recognition', modelId, {
         device: 'webgpu',
         // Whisper's encoder is precision-sensitive; the decoder quantizes well.
         dtype: { encoder_model: 'fp32', decoder_model_merged: 'q4' },
@@ -49,7 +54,7 @@ function loadAsr(): Promise<AsrPipeline> {
       })) as unknown as AsrPipeline
     } catch {
       // WASM path: slower but universal. q8 keeps the download small.
-      return (await pipeline('automatic-speech-recognition', MODEL_ID, {
+      return (await pipeline('automatic-speech-recognition', modelId, {
         device: 'wasm',
         dtype: 'q8',
         progress_callback,
@@ -64,6 +69,7 @@ scope.addEventListener('message', (e: MessageEvent) => {
   queue = queue.then(async () => {
     try {
       if (msg.type === 'load') {
+        if (msg.model && MODEL_IDS[msg.model]) modelId = MODEL_IDS[msg.model]
         await loadAsr()
         scope.postMessage({ type: 'ready' })
         return

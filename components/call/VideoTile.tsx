@@ -82,6 +82,9 @@ export function VideoTile({
         </div>
       )}
 
+      {/* Always visible on touch screens (there's no hover to reveal it);
+          desktop keeps the tidier hover-only reveal. Spotlighting is ONLY this
+          button — a stray tap on the tile can't hijack the layout. */}
       {onExpand && (
         <button
           type="button"
@@ -90,7 +93,7 @@ export function VideoTile({
             onExpand()
           }}
           aria-label="Expand"
-          className="absolute left-2 top-2 hidden rounded-md bg-black/55 p-1.5 text-white backdrop-blur transition-colors hover:bg-black/75 group-hover:block"
+          className="absolute left-2 top-2 block rounded-md bg-black/55 p-1.5 text-white backdrop-blur transition-colors hover:bg-black/75 sm:hidden sm:group-hover:block"
         >
           <Maximize2 className="size-3.5" />
         </button>

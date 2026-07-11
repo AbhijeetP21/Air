@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { ArrowRight, Loader2, Video } from 'lucide-react'
+import { ArrowRight, Loader2, Radio, Video } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { createClient } from '@/lib/supabase/client'
@@ -27,6 +27,7 @@ type Created = { slug: string; url: string }
 export function CreateRoomForm({ userId }: { userId: string }) {
   const supabase = createClient()
   const [name, setName] = useState('')
+  const [broadcast, setBroadcast] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [created, setCreated] = useState<Created | null>(null)
 
@@ -46,6 +47,7 @@ export function CreateRoomForm({ userId }: { userId: string }) {
         display_name: displayName,
         created_by: userId,
         expires_at: expiresAt,
+        broadcast,
       })
 
       if (!error) {
@@ -105,6 +107,40 @@ export function CreateRoomForm({ userId }: { userId: string }) {
         <p className="text-xs text-muted-foreground">
           Shown to people in the room. Leave blank for an unnamed room.
         </p>
+      </div>
+
+      {/* Broadcast: one-to-many. Fixed at creation — flipping a live room
+          between modes would strand already-minted publish grants. */}
+      <div className="flex items-center justify-between rounded-lg border bg-card px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Radio className="size-4 text-primary" />
+          <div className="text-sm">
+            <p className="font-medium">Broadcast mode</p>
+            <p className="text-xs text-muted-foreground">
+              Only you are seen and heard. Everyone else joins as a viewer and
+              can ask questions in chat.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={broadcast}
+          aria-label="Broadcast mode"
+          onClick={() => setBroadcast((b) => !b)}
+          disabled={submitting}
+          className={cn(
+            'inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors',
+            broadcast ? 'bg-primary' : 'bg-muted',
+          )}
+        >
+          <span
+            className={cn(
+              'inline-block size-5 rounded-full bg-white shadow-sm transition-transform',
+              broadcast ? 'translate-x-5' : 'translate-x-0',
+            )}
+          />
+        </button>
       </div>
 
       <Button

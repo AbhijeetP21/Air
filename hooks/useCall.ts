@@ -54,12 +54,18 @@ const MAX_CHAT_MESSAGES = 1000
 // LiveKit data-channel topics.
 const CHAT_TOPIC = 'chat'
 const HAND_TOPIC = 'hand'
+// Host-announced room policy (currently: broadcast audience-chat visibility).
+const POLICY_TOPIC = 'policy'
 
 export type UseCallParams = {
   slug: string
   /** rooms.id — needed to file waiting-room join requests. */
   roomId: string
   maxParticipants: number
+  /** rooms.created_by — the host's user id. */
+  hostId: string
+  /** Broadcast room: only the host publishes A/V; everyone else views. */
+  broadcast: boolean
   user: { id: string; displayName: string; avatarUrl: string | null }
 }
 
@@ -75,7 +81,13 @@ export type UseCallReturn = {
   roomFull: boolean
   /** Ephemeral session chat (not persisted; cleared on leave). */
   chatMessages: ChatMessage[]
-  sendChat: (text: string, image?: ChatImage) => void
+  sendChat: (text: string, image?: ChatImage, to?: 'all' | 'host') => void
+  /** This client is a broadcast viewer (no mic/camera, chat only). */
+  isViewer: boolean
+  /** Broadcast: whether the audience may message everyone (host-controlled). */
+  audienceChatAll: boolean
+  /** Host only: allow/forbid audience-to-everyone chat (announced to room). */
+  setAudienceChat: (allow: boolean) => void
   /** Whether the local user's hand is raised. */
   handRaised: boolean
   /** Toggle the local raised hand (broadcast to the room over a data channel). */
@@ -191,10 +203,16 @@ export function useCall({
   slug,
   roomId,
   maxParticipants,
+  hostId,
+  broadcast,
   user,
 }: UseCallParams): UseCallReturn {
   const router = useRouter()
   const media = useMedia()
+  const isHost = user.id === hostId
+  // Broadcast viewers never publish — and never get a mic/camera permission
+  // prompt, since we skip media acquisition for them entirely.
+  const isViewer = broadcast && !isHost
   const {
     participants,
     upsertFromPresence,
@@ -214,6 +232,9 @@ export function useCall({
   const [handRaised, setHandRaised] = useState(false)
   // Mirror for event handlers (rebroadcast to newcomers without stale closures).
   const handRaisedRef = useRef(false)
+  // When the local hand went up — carried in the broadcast so everyone orders
+  // the queue identically (first raised, first served), even late joiners.
+  const handRaisedAtRef = useRef<number | null>(null)
   // ---- AI notes state ----
   const [transcript, setTranscript] = useState<TranscriptLine[]>([])
   const [notesEnabled, setNotesEnabled] = useState(false)
@@ -228,6 +249,10 @@ export function useCall({
   const [transcriberProgress, setTranscriberProgress] = useState<number | null>(
     null,
   )
+  // Broadcast chat policy: may the audience message everyone? Host-announced
+  // over the policy topic; defaults to questions-to-host-only.
+  const [audienceChatAll, setAudienceChatAll] = useState(false)
+  const audienceChatAllRef = useRef(false)
   // Last-known hand state per remote identity. Hands are rebroadcast whenever
   // someone joins, so we only toast on a false→true *transition*, not on every
   // received payload.
@@ -377,7 +402,11 @@ export function useCall({
       const room = roomRef.current
       if (!room) return
       const payload = new TextEncoder().encode(
-        JSON.stringify({ peerId: self.peerId, raised }),
+        JSON.stringify({
+          peerId: self.peerId,
+          raised,
+          at: handRaisedAtRef.current ?? Date.now(),
+        }),
       )
       const opts: DataPublishOptions = { reliable: true, topic: HAND_TOPIC }
       void room.localParticipant
@@ -389,6 +418,22 @@ export function useCall({
     },
     [self],
   )
+
+  // Host: announce the broadcast chat policy (also rebroadcast to newcomers).
+  const publishPolicy = useCallback((allowAll: boolean) => {
+    const room = roomRef.current
+    if (!room) return
+    const payload = new TextEncoder().encode(
+      JSON.stringify({ audienceChatAll: allowAll }),
+    )
+    const opts: DataPublishOptions = { reliable: true, topic: POLICY_TOPIC }
+    void room.localParticipant
+      .publishData(
+        payload as Parameters<typeof room.localParticipant.publishData>[0],
+        opts,
+      )
+      .catch((err) => rtcError('Call', 'policy broadcast failed', err))
+  }, [])
 
   // Broadcast a notes-protocol signal (state announcement or transcript line).
   const publishNotes = useCallback((signal: NotesSignal) => {
@@ -420,6 +465,8 @@ export function useCall({
           if (handRaisedRef.current) publishHand(true)
           // Same for note-taking: late joiners must know notes are on (consent).
           if (notesEnabledRef.current) publishNotes({ kind: 'state', active: true })
+          // Broadcast hosts re-announce the chat policy for the newcomer.
+          if (broadcast && isHost) publishPolicy(audienceChatAllRef.current)
         })
         .on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
           rtcLog('Call', `participant left: ${p.identity}`)
@@ -492,12 +539,24 @@ export function useCall({
             try {
               const text = new TextDecoder().decode(payload)
               if (topic === HAND_TOPIC) {
-                const raised = Boolean(
-                  (JSON.parse(text) as { raised?: boolean }).raised,
-                )
+                const parsed = JSON.parse(text) as {
+                  raised?: boolean
+                  at?: unknown
+                }
+                const raised = Boolean(parsed.raised)
+                // Raise time orders the queue (first raised, first served).
+                // Untrusted, so clamp: a future timestamp can't jump the line.
+                const rawAt = Number(parsed.at)
+                const raisedAt =
+                  Number.isFinite(rawAt) && rawAt > 0
+                    ? Math.min(rawAt, Date.now())
+                    : Date.now()
                 const wasRaised = remoteHandsRef.current.get(p.identity) ?? false
                 remoteHandsRef.current.set(p.identity, raised)
-                patch(p.identity, { handRaised: raised })
+                patch(p.identity, {
+                  handRaised: raised,
+                  handRaisedAt: raised ? raisedAt : undefined,
+                })
                 // Toast only on the false→true transition — hands are
                 // rebroadcast on every newcomer join, and re-toasting those
                 // would spam the whole room.
@@ -506,6 +565,18 @@ export function useCall({
                     icon: '✋',
                   })
                 }
+                return
+              }
+              if (topic === POLICY_TOPIC) {
+                // Only the real host may set policy — verified against the
+                // server-set metadata userId, not anything in the payload.
+                if (parseMetadata(p.metadata).userId !== hostId) return
+                const allow = Boolean(
+                  (JSON.parse(text) as { audienceChatAll?: unknown })
+                    .audienceChatAll,
+                )
+                audienceChatAllRef.current = allow
+                setAudienceChatAll(allow)
                 return
               }
               if (topic === NOTES_TOPIC) {
@@ -559,6 +630,9 @@ export function useCall({
                     MAX_DISPLAY_NAME_LENGTH,
                   ),
                   image: sanitizeChatImage(msg.image),
+                  // Cosmetic label only; delivery scoping happened at send
+                  // via destinationIdentities.
+                  to: msg.to === 'host' ? 'host' : undefined,
                 }),
               )
             } catch (err) {
@@ -611,6 +685,10 @@ export function useCall({
       media,
       publishHand,
       publishNotes,
+      publishPolicy,
+      broadcast,
+      isHost,
+      hostId,
       clearRemote,
       router,
     ],
@@ -622,6 +700,14 @@ export function useCall({
     setRoomFull(false)
 
     async function prepare() {
+      // Viewers publish nothing, so don't touch the camera or microphone at
+      // all — joining a broadcast should never trigger a permission prompt.
+      if (isViewer) {
+        upsertFromPresence(self, { isLocal: true })
+        setCallStatus('idle')
+        return
+      }
+
       setCallStatus('acquiring-media')
 
       let localStream: MediaStream
@@ -655,6 +741,7 @@ export function useCall({
       videoPubRef.current = null
       screenOwnsVideoPubRef.current = false
       handRaisedRef.current = false
+      handRaisedAtRef.current = null
       setHandRaised(false)
       notesEnabledRef.current = false
       setNotesEnabled(false)
@@ -773,8 +860,13 @@ export function useCall({
     roomRef.current = room
 
     // Publish our processed tracks (RNNoise-cleaned audio, blurred camera).
-    const audioTrack = media.managerRef.current?.getActiveAudioTrack() ?? null
-    const videoTrack = media.managerRef.current?.getCameraVideoTrack() ?? null
+    // Viewers have nothing to publish (and no publish grant anyway).
+    const audioTrack = isViewer
+      ? null
+      : (media.managerRef.current?.getActiveAudioTrack() ?? null)
+    const videoTrack = isViewer
+      ? null
+      : (media.managerRef.current?.getCameraVideoTrack() ?? null)
     try {
       if (audioTrack) {
         audioPubRef.current = await room.localParticipant.publishTrack(audioTrack, {
@@ -802,6 +894,8 @@ export function useCall({
     // the room, since only newcomers get the rebroadcast otherwise.
     if (handRaisedRef.current) publishHand(true)
     if (notesEnabledRef.current) publishNotes({ kind: 'state', active: true })
+    // A host joining after the audience must announce the chat policy.
+    if (broadcast && isHost) publishPolicy(audienceChatAllRef.current)
 
     setCallStatus('connected')
     rtcLog('Call', `joined room ${slug} as ${self.peerId}`)
@@ -818,6 +912,10 @@ export function useCall({
     reconcileSubscriptions,
     publishHand,
     publishNotes,
+    publishPolicy,
+    broadcast,
+    isHost,
+    isViewer,
   ])
 
   // Keep the local participant's preview stream + mic/camera flags in sync.
@@ -841,6 +939,32 @@ export function useCall({
     self.peerId,
   ])
 
+  // Backgrounding the app (phone home screen, app switch) freezes the camera —
+  // remotes would stare at a frozen frame while the stale video keeps eating
+  // uplink that the audio needs. Pause the camera while hidden (others see the
+  // avatar) and restore it when the app returns. Screen shares are exempt:
+  // presenting from another app/tab is the whole point of a share.
+  const hiddenPausedVideoRef = useRef(false)
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden) {
+        if (
+          callStatus === 'connected' &&
+          media.mediaState.videoEnabled &&
+          !media.mediaState.screenSharing
+        ) {
+          hiddenPausedVideoRef.current = true
+          media.setVideoEnabled(false)
+        }
+      } else if (hiddenPausedVideoRef.current) {
+        hiddenPausedVideoRef.current = false
+        media.setVideoEnabled(true)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [callStatus, media])
+
   // Mirror local mic state onto the SFU publication so remote tiles update.
   useEffect(() => {
     const pub = audioPubRef.current
@@ -858,23 +982,46 @@ export function useCall({
   }, [media.mediaState.videoEnabled, media.mediaState.screenSharing])
 
   const sendChat = useCallback(
-    (text: string, image?: ChatImage) => {
+    (text: string, image?: ChatImage, to: 'all' | 'host' = 'all') => {
       const trimmed = text.trim()
       const room = roomRef.current
       // Allow an image-only message, but require at least one of text/image.
       if ((!trimmed && !image) || !room) return
+
+      // Direct-to-host questions are delivered only to the host's session(s),
+      // found by the trusted metadata userId (a display name can't be forged
+      // into receiving them). If the host isn't connected, don't pretend.
+      let destinationIdentities: string[] | undefined
+      if (to === 'host' && !isHost) {
+        destinationIdentities = []
+        room.remoteParticipants.forEach((p) => {
+          if (parseMetadata(p.metadata).userId === hostId) {
+            destinationIdentities!.push(p.identity)
+          }
+        })
+        if (destinationIdentities.length === 0) {
+          toast.error("The host isn't in the room yet.")
+          return
+        }
+      }
+
       const message: ChatMessage = {
         id: nanoid(8),
         from: self.peerId,
         displayName: self.displayName,
         text: trimmed.slice(0, MAX_CHAT_LENGTH),
         ...(image ? { image } : {}),
+        ...(to === 'host' && !isHost ? { to: 'host' as const } : {}),
         at: Date.now(),
       }
       // We don't receive our own data messages — append locally now.
       setChatMessages((prev) => appendChat(prev, message))
       const payload = new TextEncoder().encode(JSON.stringify(message))
-      const opts: DataPublishOptions = { reliable: true, topic: CHAT_TOPIC }
+      const opts: DataPublishOptions = {
+        reliable: true,
+        topic: CHAT_TOPIC,
+        ...(destinationIdentities ? { destinationIdentities } : {}),
+      }
       void room.localParticipant
         .publishData(
           payload as Parameters<typeof room.localParticipant.publishData>[0],
@@ -882,14 +1029,29 @@ export function useCall({
         )
         .catch((err) => rtcError('Call', 'chat send failed', err))
     },
-    [self],
+    [self, isHost, hostId],
+  )
+
+  // Host: allow/forbid audience-to-everyone chat in a broadcast.
+  const setAudienceChat = useCallback(
+    (allow: boolean) => {
+      if (!isHost) return
+      audienceChatAllRef.current = allow
+      setAudienceChatAll(allow)
+      publishPolicy(allow)
+    },
+    [isHost, publishPolicy],
   )
 
   const toggleHand = useCallback(() => {
     const raised = !handRaisedRef.current
     handRaisedRef.current = raised
+    handRaisedAtRef.current = raised ? Date.now() : null
     setHandRaised(raised)
-    patch(self.peerId, { handRaised: raised })
+    patch(self.peerId, {
+      handRaised: raised,
+      handRaisedAt: raised ? handRaisedAtRef.current! : undefined,
+    })
     publishHand(raised)
   }, [self, patch, publishHand])
 
@@ -902,12 +1064,10 @@ export function useCall({
     publishNotes({ kind: 'state', active })
   }, [publishNotes])
 
-  // Phones sit this out (thermals — same policy as blur/noise suppression);
-  // they still hear everyone's lines and can read/export the transcript.
+  // Phones transcribe too — with the tiny model (see below). All-mobile calls
+  // must still produce a transcript; the VAD keeps idle cost near zero.
   const canTranscribe =
-    typeof window !== 'undefined' &&
-    supportsLocalTranscription() &&
-    !isLikelyMobile()
+    typeof window !== 'undefined' && supportsLocalTranscription()
 
   // While anyone in the room is taking notes, transcribe our own mic locally
   // and share the finished lines. Each voice is recognized from its clean,
@@ -938,7 +1098,8 @@ export function useCall({
         setTranscriberProgress(progress ?? null)
       },
     })
-    transcriber.start(stream)
+    // Tiny on phones (5x smaller download, far cooler); base on desktops.
+    transcriber.start(stream, { model: isLikelyMobile() ? 'tiny' : 'base' })
     return () => {
       transcriber.stop()
       setTranscriberStatus('idle')
@@ -1044,6 +1205,9 @@ export function useCall({
     roomFull,
     chatMessages,
     sendChat,
+    isViewer,
+    audienceChatAll,
+    setAudienceChat,
     handRaised,
     toggleHand,
     transcript,

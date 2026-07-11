@@ -44,7 +44,7 @@ export class LocalTranscriber {
   constructor(private readonly handlers: TranscriberHandlers) {}
 
   /** Begin transcribing the audio track of `stream` (the processed mic). */
-  start(stream: MediaStream): void {
+  start(stream: MediaStream, opts: { model?: 'tiny' | 'base' } = {}): void {
     const audioTrack = stream.getAudioTracks()[0]
     if (!audioTrack) {
       this.handlers.onStatus('error')
@@ -78,7 +78,7 @@ export class LocalTranscriber {
         this.handlers.onStatus('error')
       }
     })
-    this.worker.postMessage({ type: 'load' })
+    this.worker.postMessage({ type: 'load', model: opts.model ?? 'base' })
 
     // Tap the mic. ScriptProcessor is legacy but universally supported and
     // costs only a buffer copy per ~85ms; the heavy work lives in the worker.

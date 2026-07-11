@@ -66,12 +66,18 @@ export async function POST(request: Request) {
   // room that lapsed between the page load and join is rejected.
   const { data: room } = await supabase
     .from('rooms')
-    .select('id, slug, is_active, expires_at, created_by, waiting_room')
+    .select('id, slug, is_active, expires_at, created_by, waiting_room, broadcast')
     .eq('slug', slug)
     .maybeSingle<
       Pick<
         Room,
-        'id' | 'slug' | 'is_active' | 'expires_at' | 'created_by' | 'waiting_room'
+        | 'id'
+        | 'slug'
+        | 'is_active'
+        | 'expires_at'
+        | 'created_by'
+        | 'waiting_room'
+        | 'broadcast'
       >
     >()
 
@@ -134,10 +140,14 @@ export async function POST(request: Request) {
     metadata: JSON.stringify({ userId: user.id, avatarUrl }),
     ttl: '2h',
   })
+  // Broadcast rooms: only the host may publish A/V. Enforced here in the
+  // grant — a modified client can't turn its own mic on. Data (chat) stays
+  // open to everyone.
+  const isHost = room.created_by === user.id
   at.addGrant({
     roomJoin: true,
     room: room.slug,
-    canPublish: true,
+    canPublish: !room.broadcast || isHost,
     canSubscribe: true,
     canPublishData: true,
   })

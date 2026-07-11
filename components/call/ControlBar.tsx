@@ -28,6 +28,8 @@ export type ControlBarProps = {
   isMobile: boolean
   /** Screen capture is supported (hidden on iOS Safari). */
   canScreenShare: boolean
+  /** Broadcast viewer: no mic/camera/hand — just notes, chat, and leave. */
+  viewer: boolean
   handRaised: boolean
   participantsOpen: boolean
   notesOpen: boolean
@@ -58,6 +60,7 @@ export function ControlBar({
   chatUnread,
   isMobile,
   canScreenShare,
+  viewer,
   handRaised,
   participantsOpen,
   notesOpen,
@@ -76,45 +79,56 @@ export function ControlBar({
 }: ControlBarProps) {
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 flex justify-center px-4"
+      className="pointer-events-none fixed inset-x-0 flex justify-center px-2 sm:px-4"
       style={{ bottom: 'calc(env(safe-area-inset-bottom) + 1rem)' }}
     >
-      <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-white/10 bg-zinc-900/90 p-2 shadow-lg backdrop-blur">
-        <ControlButton
-          active={!mediaState.audioEnabled}
-          speaking={mediaState.audioEnabled && localSpeaking}
-          disabled={!mediaState.hasMic}
-          onClick={onToggleAudio}
-          label={mediaState.audioEnabled ? 'Mute microphone' : 'Unmute microphone'}
-        >
-          {mediaState.audioEnabled ? (
-            <Mic className="size-5" />
-          ) : (
-            <MicOff className="size-5" />
-          )}
-        </ControlButton>
-
-        <ControlButton
-          active={!mediaState.videoEnabled}
-          disabled={!mediaState.hasCamera}
-          onClick={onToggleVideo}
-          label={mediaState.videoEnabled ? 'Turn camera off' : 'Turn camera on'}
-        >
-          {mediaState.videoEnabled ? (
-            <Video className="size-5" />
-          ) : (
-            <VideoOff className="size-5" />
-          )}
-        </ControlButton>
-
-        {isMobile && mediaState.hasCamera && mediaState.hasMultipleCameras && (
-          <ControlButton onClick={onFlipCamera} label="Flip camera">
-            <SwitchCamera className="size-5" />
+      {/* Compact sizing under sm so all controls fit a narrow phone; the
+          overflow scroll is a last-resort safety net for tiny viewports. */}
+      <div className="pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-white/10 bg-zinc-900/90 p-1.5 shadow-lg backdrop-blur sm:gap-2 sm:p-2">
+        {/* Viewers publish nothing — mic/camera/hand/share controls would be
+            dead weight, so they get notes + chat + leave only. */}
+        {!viewer && (
+          <ControlButton
+            active={!mediaState.audioEnabled}
+            speaking={mediaState.audioEnabled && localSpeaking}
+            disabled={!mediaState.hasMic}
+            onClick={onToggleAudio}
+            label={mediaState.audioEnabled ? 'Mute microphone' : 'Unmute microphone'}
+          >
+            {mediaState.audioEnabled ? (
+              <Mic className="size-4 sm:size-5" />
+            ) : (
+              <MicOff className="size-4 sm:size-5" />
+            )}
           </ControlButton>
         )}
 
+        {!viewer && (
+          <ControlButton
+            active={!mediaState.videoEnabled}
+            disabled={!mediaState.hasCamera}
+            onClick={onToggleVideo}
+            label={mediaState.videoEnabled ? 'Turn camera off' : 'Turn camera on'}
+          >
+            {mediaState.videoEnabled ? (
+              <Video className="size-4 sm:size-5" />
+            ) : (
+              <VideoOff className="size-4 sm:size-5" />
+            )}
+          </ControlButton>
+        )}
+
+        {!viewer &&
+          isMobile &&
+          mediaState.hasCamera &&
+          mediaState.hasMultipleCameras && (
+            <ControlButton onClick={onFlipCamera} label="Flip camera">
+              <SwitchCamera className="size-4 sm:size-5" />
+            </ControlButton>
+          )}
+
         {/* CPU-heavy effects are desktop-only — they overheat phones in a mesh. */}
-        {!isMobile && (
+        {!viewer && !isMobile && (
           <>
             <ControlButton
               active={mediaState.noiseSuppression}
@@ -126,7 +140,7 @@ export function ControlBar({
                   : 'Noise cancellation off'
               }
             >
-              <AudioLines className="size-5" />
+              <AudioLines className="size-4 sm:size-5" />
             </ControlButton>
 
             <ControlButton
@@ -139,12 +153,12 @@ export function ControlBar({
                   : 'Background blur off'
               }
             >
-              <Aperture className="size-5" />
+              <Aperture className="size-4 sm:size-5" />
             </ControlButton>
           </>
         )}
 
-        {canScreenShare && (
+        {!viewer && canScreenShare && (
           <ControlButton
             active={mediaState.screenSharing}
             highlight
@@ -153,27 +167,31 @@ export function ControlBar({
               mediaState.screenSharing ? 'Stop sharing screen' : 'Share screen'
             }
           >
-            <MonitorUp className="size-5" />
+            <MonitorUp className="size-4 sm:size-5" />
           </ControlButton>
         )}
 
-        <ControlButton
-          active={handRaised}
-          highlight
-          onClick={onToggleHand}
-          label={handRaised ? 'Lower hand' : 'Raise hand'}
-        >
-          <Hand className="size-5" />
-        </ControlButton>
+        {!viewer && (
+          <ControlButton
+            active={handRaised}
+            highlight
+            onClick={onToggleHand}
+            label={handRaised ? 'Lower hand' : 'Raise hand'}
+          >
+            <Hand className="size-4 sm:size-5" />
+          </ControlButton>
+        )}
 
-        <ControlButton
-          active={participantsOpen}
-          highlight
-          onClick={onToggleParticipants}
-          label={participantsOpen ? 'Hide participants' : 'Show participants'}
-        >
-          <Users className="size-5" />
-        </ControlButton>
+        {!viewer && (
+          <ControlButton
+            active={participantsOpen}
+            highlight
+            onClick={onToggleParticipants}
+            label={participantsOpen ? 'Hide participants' : 'Show participants'}
+          >
+            <Users className="size-4 sm:size-5" />
+          </ControlButton>
+        )}
 
         <ControlButton
           active={notesOpen}
@@ -181,7 +199,7 @@ export function ControlBar({
           onClick={onToggleNotes}
           label={notesOpen ? 'Close AI notes' : 'Open AI notes'}
         >
-          <NotebookPen className="size-5" />
+          <NotebookPen className="size-4 sm:size-5" />
           {/* Recording-style dot: notes are live somewhere in the room. */}
           {notesRunning && (
             <span className="absolute -right-0.5 -top-0.5 size-2.5 animate-pulse rounded-full bg-primary ring-2 ring-zinc-900" />
@@ -195,13 +213,13 @@ export function ControlBar({
           label={chatOpen ? 'Close chat' : 'Open chat'}
           badge={chatUnread}
         >
-          <MessageSquare className="size-5" />
+          <MessageSquare className="size-4 sm:size-5" />
         </ControlButton>
 
-        <div className="mx-1 h-6 w-px bg-white/10" />
+        <div className="mx-0.5 h-6 w-px shrink-0 bg-white/10 sm:mx-1" />
 
         <ControlButton onClick={onLeave} destructive label="Leave call">
-          <PhoneOff className="size-5" />
+          <PhoneOff className="size-4 sm:size-5" />
         </ControlButton>
       </div>
     </div>
@@ -237,7 +255,7 @@ function ControlButton({
       aria-label={label}
       title={label}
       className={cn(
-        'relative flex size-11 items-center justify-center rounded-full text-white transition-colors',
+        'relative flex size-9 shrink-0 items-center justify-center rounded-full text-white transition-colors sm:size-11',
         'bg-white/5 hover:bg-white/10',
         active && !destructive && 'bg-red-500/90 hover:bg-red-500',
         highlight && active && 'bg-primary hover:bg-primary/90',

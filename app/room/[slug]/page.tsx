@@ -53,6 +53,7 @@ export default async function RoomPage({ params }: RoomPageProps) {
       maxParticipants={room.max_participants}
       hostId={room.created_by}
       waitingRoom={room.waiting_room}
+      broadcast={room.broadcast}
       user={{ id: user.id, displayName, avatarUrl }}
     />
   )
