@@ -32,7 +32,15 @@ export function VideoTile({
   /** When set, shows a hover "expand" button that spotlights this tile. */
   onExpand?: () => void
 }) {
-  const showVideo = Boolean(participant.videoEnabled && participant.stream)
+  // Require an actual video track, not just a stream: under selective
+  // subscription a remote's stream exists as soon as their AUDIO track attaches,
+  // while the video track arrives later — rendering <video> in that window would
+  // show a black rectangle instead of the avatar. Gate on a present video track.
+  const showVideo = Boolean(
+    participant.videoEnabled &&
+      participant.stream &&
+      participant.stream.getVideoTracks().length > 0,
+  )
 
   // Remote tiles analyse their own incoming audio; the local tile reuses the
   // value computed once by the parent.

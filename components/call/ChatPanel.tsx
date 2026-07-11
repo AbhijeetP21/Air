@@ -56,6 +56,9 @@ export function ChatPanel({
   const [audience, setAudience] = useState<'host' | 'all'>('host')
   const inputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  // Follow the live conversation unless the user scrolled up to read back — a
+  // new message shouldn't yank them to the bottom mid-read.
+  const followRef = useRef(true)
 
   const isViewer = broadcast && !isHost
   const effectiveAudience = isViewer
@@ -65,7 +68,9 @@ export function ChatPanel({
     : 'all'
 
   useEffect(() => {
-    if (open) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (open && followRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [messages, open])
 
   // Close the lightbox with Escape.
@@ -137,7 +142,14 @@ export function ChatPanel({
           </button>
         </header>
 
-        <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+        <div
+          className="flex-1 space-y-3 overflow-y-auto px-4 py-4"
+          onScroll={(e) => {
+            const el = e.currentTarget
+            followRef.current =
+              el.scrollHeight - el.scrollTop - el.clientHeight < 60
+          }}
+        >
           {messages.length === 0 ? (
             <p className="pt-8 text-center text-sm text-muted-foreground">
               No messages yet. Say hello.
