@@ -162,8 +162,13 @@ describe('livekit-token route', () => {
     })
 
     const token = h.tokens[0]
-    // Identity is the session id, NOT the user id (two-tab safety).
-    expect(token.opts.identity).toBe(SESSION_ID)
+    // Identity carries the session id (two-tab safety) but is namespaced with a
+    // per-user tag so a different user can't present a victim's identity and
+    // trigger an SFU disconnect. It ends with the session id and is never the
+    // bare session id or the raw user id.
+    expect(token.opts.identity).toMatch(new RegExp(`\\.${SESSION_ID}$`))
+    expect(token.opts.identity).not.toBe(SESSION_ID)
+    expect(token.opts.identity).not.toContain(JOINER_ID)
     expect(token.opts.name).toBe('Joan Joiner')
     // The trusted userId travels in server-set metadata.
     expect(JSON.parse(token.opts.metadata)).toEqual({
@@ -183,6 +188,52 @@ describe('livekit-token route', () => {
     })
     await post({ slug: 'testroom', sessionId: SESSION_ID })
     expect(h.tokens[0].opts.name).toBe('ada.lovelace')
+  })
+
+  it('namespaces identity per user so two users with the same session id differ', async () => {
+    useState({
+      user: { id: 'user-a' },
+      tables: { rooms: { select: { data: activeRoom() } } },
+    })
+    await post({ slug: 'testroom', sessionId: SESSION_ID })
+    useState({
+      user: { id: 'user-b' },
+      tables: { rooms: { select: { data: activeRoom() } } },
+    })
+    await post({ slug: 'testroom', sessionId: SESSION_ID })
+    // Same session id, different users → different LiveKit identities, so
+    // user-b cannot present user-a's identity to evict them from the SFU.
+    expect(h.tokens[0].opts.identity).not.toBe(h.tokens[1].opts.identity)
+    expect(h.tokens[0].opts.identity).toMatch(new RegExp(`\\.${SESSION_ID}$`))
+    expect(h.tokens[1].opts.identity).toMatch(new RegExp(`\\.${SESSION_ID}$`))
+  })
+
+  it('blocks a denied (kicked/banned) user even with the waiting room off', async () => {
+    // waiting_room is false here — the ban must still be enforced so a removed
+    // participant cannot rejoin by reloading.
+    useState({
+      user: joiner,
+      tables: {
+        rooms: { select: { data: activeRoom({ waiting_room: false }) } },
+        room_join_requests: { select: { data: { status: 'denied' } } },
+      },
+    })
+    const res = await post({ slug: 'testroom', sessionId: SESSION_ID })
+    expect(res.status).toBe(403)
+    expect((await res.json()).code).toBe('approval_denied')
+    expect(h.tokens).toHaveLength(0)
+  })
+
+  it('lets a normal joiner in when they have no ban and the waiting room is off', async () => {
+    useState({
+      user: joiner,
+      tables: {
+        rooms: { select: { data: activeRoom({ waiting_room: false }) } },
+        room_join_requests: { select: { data: null } },
+      },
+    })
+    const res = await post({ slug: 'testroom', sessionId: SESSION_ID })
+    expect(res.status).toBe(200)
   })
 
   describe('broadcast rooms', () => {

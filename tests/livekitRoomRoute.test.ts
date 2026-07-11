@@ -153,12 +153,18 @@ describe('livekit-room route', () => {
         'testroom',
         'target-session',
       )
-      // The join request is marked denied so a kicked user can't re-enter a
-      // waiting-room-enabled room.
+      // A 'denied' ban row is upserted (insert-or-update) so the kick is
+      // durable even when the user has no existing request — the token route
+      // then refuses them unconditionally.
       const reqChain = mock.chains['room_join_requests']?.[0]
-      expect(reqChain.update).toHaveBeenCalledWith({ status: 'denied' })
-      expect(reqChain.eq).toHaveBeenCalledWith('room_id', room.id)
-      expect(reqChain.eq).toHaveBeenCalledWith('user_id', 'user-kicked')
+      expect(reqChain.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          room_id: room.id,
+          user_id: 'user-kicked',
+          status: 'denied',
+        }),
+        expect.objectContaining({ onConflict: 'room_id,user_id' }),
+      )
     })
 
     it('still kicks when metadata is missing or malformed (no DB write)', async () => {

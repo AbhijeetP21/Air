@@ -221,6 +221,17 @@ function CallExperience({
     callStatus === 'connecting' ||
     callStatus === 'reconnecting'
 
+  // Keep the latest leaveCall reachable from the popstate handler without making
+  // it an effect dependency: leaveCall's identity changes as media state moves,
+  // and re-running the effect would push a fresh sentinel each time. iOS Safari
+  // rate-limits history.pushState (~100/30s) and throws once exceeded, which a
+  // busy call blows through in seconds — leaving the back-swipe guard broken.
+  // Pushing exactly once per active-call transition keeps us well clear.
+  const leaveCallRef = useRef(leaveCall)
+  useEffect(() => {
+    leaveCallRef.current = leaveCall
+  }, [leaveCall])
+
   useEffect(() => {
     if (!inActiveCall) return
     window.history.pushState({ airCall: true }, '')
@@ -238,14 +249,14 @@ function CallExperience({
         return
       }
       if (window.confirm('Leave the call?')) {
-        void leaveCall()
+        void leaveCallRef.current()
       } else {
         window.history.pushState({ airCall: true }, '')
       }
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [inActiveCall, leaveCall])
+  }, [inActiveCall])
 
   // Closing the tab / refreshing mid-call gets a native "leave site?" prompt.
   useEffect(() => {

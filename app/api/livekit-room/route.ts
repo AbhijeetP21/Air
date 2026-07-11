@@ -63,13 +63,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
   }
 
-  // Only the room's creator may moderate. RLS lets any member read the row, so
-  // we compare created_by explicitly rather than trusting the client.
-  const { data: room } = await supabase
-    .from('rooms')
-    .select('id, slug, created_by')
-    .eq('slug', slug)
-    .maybeSingle<Pick<Room, 'id' | 'slug' | 'created_by'>>()
+  // Only the room's creator may moderate. Resolve the slug through the
+  // SECURITY DEFINER lookup (the rooms table is owner-only readable), then
+  // compare created_by explicitly rather than trusting the client.
+  const { data: room } = (await supabase.rpc('get_active_room_by_slug', {
+    p_slug: slug,
+  })) as { data: Pick<Room, 'id' | 'slug' | 'created_by'> | null }
   if (!room) {
     return NextResponse.json({ error: 'Room not found' }, { status: 404 })
   }
@@ -85,17 +84,23 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Missing target' }, { status: 400 })
       }
       // Read the participant *before* removal to learn their trusted userId,
-      // then mark any join request denied so a kicked user can't immediately
-      // re-enter a waiting-room-enabled room.
+      // then record a 'denied' ban so the kick is durable. Upsert (not update)
+      // because a user who joined directly — waiting room off — has no request
+      // row to flip; without the insert the ban wouldn't stick and they'd
+      // rejoin on reload. The token route enforces this row unconditionally.
       const info = await svc.getParticipant(slug, targetIdentity)
       await svc.removeParticipant(slug, targetIdentity)
       const targetUserId = metadataUserId(info.metadata)
       if (targetUserId) {
-        await supabase
-          .from('room_join_requests')
-          .update({ status: 'denied' })
-          .eq('room_id', room.id)
-          .eq('user_id', targetUserId)
+        await supabase.from('room_join_requests').upsert(
+          {
+            room_id: room.id,
+            user_id: targetUserId,
+            status: 'denied',
+            display_name: info.name || null,
+          },
+          { onConflict: 'room_id,user_id' },
+        )
       }
     } else if (action === 'mute') {
       if (typeof targetIdentity !== 'string' || !targetIdentity) {

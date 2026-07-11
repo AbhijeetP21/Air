@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 
 import { MediaManager } from '@/lib/webrtc/MediaManager'
 import type { MediaState } from '@/types'
@@ -175,21 +175,42 @@ export function useMedia() {
     setMediaState({ ...INITIAL_STATE })
   }, [manager])
 
-  return {
-    managerRef,
-    mediaState,
-    acquireLocalStream,
-    toggleAudio,
-    setAudioEnabled,
-    setVideoEnabled,
-    toggleVideo,
-    switchCamera,
-    toggleNoiseSuppression,
-    toggleBackgroundBlur,
-    startScreenShare,
-    stopScreenShare,
-    stopAll,
-  }
+  // Memoize the returned object so its identity only changes when mediaState
+  // does (every callback below is already stable). Consumers like useCall build
+  // callbacks that close over this object; an unstable identity would recreate
+  // them every render and, in RoomClient, re-run effects keyed on them.
+  return useMemo(
+    () => ({
+      managerRef,
+      mediaState,
+      acquireLocalStream,
+      toggleAudio,
+      setAudioEnabled,
+      setVideoEnabled,
+      toggleVideo,
+      switchCamera,
+      toggleNoiseSuppression,
+      toggleBackgroundBlur,
+      startScreenShare,
+      stopScreenShare,
+      stopAll,
+    }),
+    [
+      managerRef,
+      mediaState,
+      acquireLocalStream,
+      toggleAudio,
+      setAudioEnabled,
+      setVideoEnabled,
+      toggleVideo,
+      switchCamera,
+      toggleNoiseSuppression,
+      toggleBackgroundBlur,
+      startScreenShare,
+      stopScreenShare,
+      stopAll,
+    ],
+  )
 }
 
 export type UseMediaReturn = ReturnType<typeof useMedia>

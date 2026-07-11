@@ -12,19 +12,15 @@ export default async function RoomPage({ params }: RoomPageProps) {
   const { slug } = await params
   const supabase = await createServerClient()
 
-  // RLS ("read active rooms") already filters out inactive/expired rooms, so a
-  // missing row covers all of: not found, deactivated, expired.
-  const { data: room } = await supabase
-    .from('rooms')
-    .select('*')
-    .eq('slug', slug)
-    .maybeSingle<Room>()
+  // Resolve the slug through the SECURITY DEFINER lookup: the rooms table is
+  // readable only by its creator (no enumeration), and this function returns
+  // the single active, unexpired row matching the exact slug — so a missing
+  // result covers all of: not found, deactivated, expired.
+  const { data: room } = (await supabase.rpc('get_active_room_by_slug', {
+    p_slug: slug,
+  })) as { data: Room | null }
 
-  const isExpired = room?.expires_at
-    ? new Date(room.expires_at).getTime() <= Date.now()
-    : false
-
-  if (!room || !room.is_active || isExpired) {
+  if (!room) {
     notFound()
   }
 

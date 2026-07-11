@@ -8,6 +8,8 @@
 // Auth-gated: only signed-in users get a token, and the grant is scoped to the
 // single room they asked for.
 
+import { createHmac } from 'node:crypto'
+
 import { AccessToken } from 'livekit-server-sdk'
 import { NextResponse } from 'next/server'
 
@@ -61,38 +63,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Missing session id' }, { status: 400 })
   }
 
-  // RLS ("read active rooms") already hides inactive/expired rooms, so a missing
-  // row covers not-found, deactivated, and expired — but re-check expiry so a
-  // room that lapsed between the page load and join is rejected.
-  const { data: room } = await supabase
-    .from('rooms')
-    .select('id, slug, is_active, expires_at, created_by, waiting_room, broadcast')
-    .eq('slug', slug)
-    .maybeSingle<
-      Pick<
-        Room,
-        | 'id'
-        | 'slug'
-        | 'is_active'
-        | 'expires_at'
-        | 'created_by'
-        | 'waiting_room'
-        | 'broadcast'
-      >
-    >()
+  // Look the room up by exact slug through a SECURITY DEFINER function. The
+  // rooms table is otherwise readable only by its creator (no enumeration), so
+  // this is the one path that resolves a slug for a joiner. It already filters
+  // inactive/expired rows, so a null result covers not-found/deactivated/expired.
+  const { data: room } = (await supabase.rpc('get_active_room_by_slug', {
+    p_slug: slug,
+  })) as {
+    data: Pick<
+      Room,
+      'id' | 'slug' | 'is_active' | 'expires_at' | 'created_by' | 'waiting_room' | 'broadcast'
+    > | null
+  }
 
-  const isExpired = room?.expires_at
-    ? new Date(room.expires_at).getTime() <= Date.now()
-    : false
-  if (!room || !room.is_active || isExpired) {
+  if (!room) {
     return NextResponse.json({ error: 'Room not found' }, { status: 404 })
   }
 
-  // Waiting room: non-host joiners need a host-approved request before a token
-  // is minted. The client interprets the `code` — 'approval_required' means
-  // "file a request", 'approval_pending' means "keep polling", and
-  // 'approval_denied' is final for this room session.
-  if (room.waiting_room && room.created_by !== user.id) {
+  const isHost = room.created_by === user.id
+
+  // Access control for non-hosts. A 'denied' request is a ban — recorded by a
+  // host kick (see the livekit-room route) or a waiting-room denial — and is
+  // ALWAYS enforced, even when the waiting room is off, so a removed user can't
+  // rejoin by reloading. The waiting-room gate is layered on top for rooms that
+  // require approval. The client keys off `code`: 'approval_required' → file a
+  // request, 'approval_pending' → keep polling, 'approval_denied' → final.
+  if (!isHost) {
     const { data: joinRequest } = await supabase
       .from('room_join_requests')
       .select('status')
@@ -100,23 +96,25 @@ export async function POST(request: Request) {
       .eq('user_id', user.id)
       .maybeSingle<{ status: 'pending' | 'approved' | 'denied' }>()
 
-    if (!joinRequest) {
-      return NextResponse.json(
-        { error: 'Ask to join first', code: 'approval_required' },
-        { status: 403 },
-      )
-    }
-    if (joinRequest.status === 'pending') {
-      return NextResponse.json(
-        { error: 'Waiting for the host', code: 'approval_pending' },
-        { status: 403 },
-      )
-    }
-    if (joinRequest.status === 'denied') {
+    if (joinRequest?.status === 'denied') {
       return NextResponse.json(
         { error: 'The host declined your request', code: 'approval_denied' },
         { status: 403 },
       )
+    }
+    if (room.waiting_room) {
+      if (!joinRequest) {
+        return NextResponse.json(
+          { error: 'Ask to join first', code: 'approval_required' },
+          { status: 403 },
+        )
+      }
+      if (joinRequest.status === 'pending') {
+        return NextResponse.json(
+          { error: 'Waiting for the host', code: 'approval_pending' },
+          { status: 403 },
+        )
+      }
     }
   }
 
@@ -132,8 +130,21 @@ export async function POST(request: Request) {
   const avatarUrl =
     (user.user_metadata?.avatar_url as string | undefined) ?? null
 
+  // The LiveKit identity is namespaced with a per-user tag derived from an
+  // HMAC of the user id under the (server-only) API secret. Two DIFFERENT users
+  // can never mint the same identity, so an attacker can't present a victim's
+  // identity to make the SFU disconnect them (LiveKit evicts the older holder
+  // of a colliding identity). The same user's own tabs share the tag but differ
+  // by sessionId, so multi-device joins still don't kick each other. The tag is
+  // opaque and doesn't leak the raw user id.
+  const userTag = createHmac('sha256', apiSecret)
+    .update(user.id)
+    .digest('base64url')
+    .slice(0, 12)
+  const identity = `${userTag}.${sessionId}`
+
   const at = new AccessToken(apiKey, apiSecret, {
-    identity: sessionId,
+    identity,
     name: displayName,
     // Server-set (unforgeable by other participants): who this session really
     // is. Clients read it to key rosters and gate the host badge.
@@ -143,7 +154,6 @@ export async function POST(request: Request) {
   // Broadcast rooms: only the host may publish A/V. Enforced here in the
   // grant — a modified client can't turn its own mic on. Data (chat) stays
   // open to everyone.
-  const isHost = room.created_by === user.id
   at.addGrant({
     roomJoin: true,
     room: room.slug,

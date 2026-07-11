@@ -24,6 +24,22 @@ export type SupabaseMockState = {
   tables?: Record<string, TableResult>
 }
 
+/**
+ * Model the get_active_room_by_slug SECURITY DEFINER function: it returns the
+ * room row only when it's active and unexpired, mirroring the SQL WHERE clause.
+ * Tests configure the row via `tables.rooms.select.data` exactly as before.
+ */
+function activeRoomRpc(state: SupabaseMockState) {
+  const row = state.tables?.rooms?.select?.data as any
+  const error = state.tables?.rooms?.select?.error ?? null
+  if (!row) return { data: null, error }
+  const expired = row.expires_at
+    ? new Date(row.expires_at).getTime() <= Date.now()
+    : false
+  if (row.is_active === false || expired) return { data: null, error }
+  return { data: row, error }
+}
+
 export function createSupabaseMock(state: SupabaseMockState) {
   // Every from() call creates a fresh chain and records it here, so tests can
   // assert on the exact filters and payloads used.
@@ -33,6 +49,10 @@ export function createSupabaseMock(state: SupabaseMockState) {
     auth: {
       getUser: vi.fn(async () => ({ data: { user: state.user ?? null } })),
     },
+    rpc: vi.fn(async (fn: string, _args?: unknown) => {
+      if (fn === 'get_active_room_by_slug') return activeRoomRpc(state)
+      return { data: null, error: null }
+    }),
     from: vi.fn((table: string) => {
       const tableResult = () => state.tables?.[table]
       const c: any = { _write: false }
@@ -46,6 +66,10 @@ export function createSupabaseMock(state: SupabaseMockState) {
         return c
       })
       c.insert = vi.fn(() => {
+        c._write = true
+        return c
+      })
+      c.upsert = vi.fn(() => {
         c._write = true
         return c
       })
