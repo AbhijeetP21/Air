@@ -317,6 +317,10 @@ export class MediaManager {
       attempts.push({ ...size, deviceId: { exact: cycleDeviceId } })
     }
     attempts.push({ ...videoConstraints(previous), facingMode: { ideal: previous } })
+    // Last-ditch: any camera at all. We already stopped the old track, so
+    // recovering *some* video beats leaving the user dark — even if it's not
+    // the lens they asked for.
+    attempts.push({})
 
     let newTrack: MediaStreamTrack | null = null
     for (const video of attempts) {

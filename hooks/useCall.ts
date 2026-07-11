@@ -1181,8 +1181,15 @@ export function useCall({
 
   const switchCamera = useCallback(async () => {
     const newTrack = await media.switchCamera()
+    if (!newTrack) {
+      // Every acquisition attempt failed (camera busy/removed mid-switch). The
+      // old track is already stopped, so the local tile falls back to the
+      // avatar — tell the user rather than leaving them silently dark.
+      toast.error('Couldn’t switch camera. Try again.')
+      return
+    }
     // Don't disturb the video sender while a screen share owns it.
-    if (newTrack && !media.mediaState.screenSharing) {
+    if (!media.mediaState.screenSharing) {
       await videoPubRef.current?.videoTrack?.replaceTrack(newTrack)
     }
   }, [media])
