@@ -195,4 +195,4 @@ public/mediapipe/                      Selfie segmentation model and WASM
 
 Personal and other noncommercial use only, under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, modify, and share Air for personal projects, study, and other noncommercial purposes at no cost.
 
-**Commercial use requires prior written permission from the author.** If you want to use Air (or a derivative) in or for a business, or in any way primarily intended for commercial advantage, contact Abhijeet Pachpute to arrange a commercial license.
+**Commercial use requires prior written permission from the author.** If you want to use Air (or a derivative) in or for a business, or in any way primarily intended for commercial advantage, contact Abhijeet Sandip Pachpute to arrange a commercial license.
