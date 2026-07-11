@@ -59,9 +59,14 @@ export function createSupabaseMock(state: SupabaseMockState) {
       const ret = () => c
       c.select = vi.fn(ret)
       c.eq = vi.fn(ret)
+      c.in = vi.fn(ret)
       c.order = vi.fn(ret)
       c.returns = vi.fn(ret)
       c.update = vi.fn(() => {
+        c._write = true
+        return c
+      })
+      c.delete = vi.fn(() => {
         c._write = true
         return c
       })

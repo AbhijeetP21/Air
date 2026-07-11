@@ -24,12 +24,16 @@ vi.mock('sonner', () => ({ toast: h.toast }))
 
 import { useWaitingRoom } from '@/hooks/useWaitingRoom'
 
-const request = (id: string, name = 'Guest') => ({
+const request = (
+  id: string,
+  name = 'Guest',
+  status: 'pending' | 'approved' | 'denied' = 'pending',
+) => ({
   id,
   room_id: 'room-1',
   user_id: `user-${id}`,
   display_name: name,
-  status: 'pending' as const,
+  status,
   created_at: new Date().toISOString(),
 })
 
@@ -67,13 +71,46 @@ describe('useWaitingRoom', () => {
     expect(mock.client.from).not.toHaveBeenCalled()
   })
 
-  it('does not poll while the waiting room is off', async () => {
+  it('polls even with the waiting room off, to surface removed users', async () => {
+    // Kicks create bans regardless of the waiting-room toggle, so the host must
+    // still see (and be able to re-admit) removed users when it's off.
     const mock = useState({
-      tables: { room_join_requests: { select: { data: [request('r1')] } } },
+      tables: {
+        room_join_requests: {
+          select: { data: [request('r1', 'Ada', 'denied')] },
+        },
+      },
     })
-    renderHook(() => useWaitingRoom({ ...hostArgs, initialEnabled: false }))
-    await act(async () => {})
-    expect(mock.client.from).not.toHaveBeenCalled()
+    const { result } = renderHook(() =>
+      useWaitingRoom({ ...hostArgs, initialEnabled: false }),
+    )
+    await waitFor(() => expect(result.current.banned).toHaveLength(1))
+    expect(mock.client.from).toHaveBeenCalled()
+    // A denied row is a ban, not a pending request.
+    expect(result.current.pending).toEqual([])
+  })
+
+  it('re-admit deletes the ban row optimistically', async () => {
+    const mock = useState({
+      tables: {
+        room_join_requests: {
+          select: { data: [request('r1', 'Ada', 'denied')] },
+        },
+      },
+    })
+    const { result } = renderHook(() => useWaitingRoom(hostArgs))
+    await waitFor(() => expect(result.current.banned).toHaveLength(1))
+
+    await act(async () => {
+      await result.current.readmit('r1')
+    })
+    expect(result.current.banned).toEqual([])
+
+    const writeChain = mock.chains['room_join_requests']?.find(
+      (c: any) => c.delete.mock.calls.length > 0,
+    )
+    expect(writeChain.delete).toHaveBeenCalled()
+    expect(writeChain.eq).toHaveBeenCalledWith('id', 'r1')
   })
 
   it('loads the pending queue and announces each arrival once', async () => {

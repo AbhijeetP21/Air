@@ -7,6 +7,7 @@ import {
   Hand,
   MicOff,
   Search,
+  UserCheck,
   UserX,
   Video,
   VideoOff,
@@ -44,6 +45,8 @@ export function ParticipantsPanel({
   onApprove,
   onDeny,
   onAdmitAll,
+  bannedRequests,
+  onReadmit,
 }: {
   open: boolean
   onClose: () => void
@@ -63,6 +66,9 @@ export function ParticipantsPanel({
   onApprove: (requestId: string) => void
   onDeny: (requestId: string) => void
   onAdmitAll: () => void
+  /** Users removed/denied from this room; re-admittable (host only). */
+  bannedRequests: JoinRequest[]
+  onReadmit: (requestId: string) => void
 }) {
   const [query, setQuery] = useState('')
 
@@ -213,6 +219,42 @@ export function ParticipantsPanel({
               </ul>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Removed / denied — re-admit to lift the ban (host only). Shown
+          independent of the waiting-room toggle, since kicks ban too. */}
+      {isHost && bannedRequests.length > 0 && (
+        <div className="border-b p-3">
+          <p className="mb-1 text-xs font-medium text-muted-foreground">
+            Removed ({bannedRequests.length})
+          </p>
+          <ul>
+            {bannedRequests.map((req) => (
+              <li
+                key={req.id}
+                className="flex items-center gap-2 rounded-lg px-1 py-1.5"
+              >
+                <Avatar className="size-7 shrink-0 opacity-60">
+                  <AvatarFallback className="text-[10px]">
+                    {initialsFromName(req.display_name || '?')}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                  {req.display_name || 'Guest'}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 px-2 text-xs"
+                  onClick={() => onReadmit(req.id)}
+                >
+                  <UserCheck className="size-3.5" />
+                  Re-admit
+                </Button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

@@ -1080,6 +1080,7 @@ export function useCall({
   // pre-mix audio on its own device — audio never leaves the machine.
   const transcriptionActive =
     callStatus === 'connected' && (notesEnabled || noteTakerMap.size > 0)
+  const transcriberRef = useRef<LocalTranscriber | null>(null)
   useEffect(() => {
     if (!transcriptionActive || !canTranscribe) return
     const stream = media.mediaState.localStream
@@ -1104,23 +1105,28 @@ export function useCall({
         setTranscriberProgress(progress ?? null)
       },
     })
+    transcriberRef.current = transcriber
     // Tiny on phones (5x smaller download, far cooler); base on desktops.
     transcriber.start(stream, { model: isLikelyMobile() ? 'tiny' : 'base' })
     return () => {
       transcriber.stop()
+      transcriberRef.current = null
       setTranscriberStatus('idle')
       setTranscriberProgress(null)
     }
-    // noiseSuppression is a dependency because toggling it replaces the audio
-    // track inside the stream — the capture graph must re-tap the new track.
-  }, [
-    transcriptionActive,
-    canTranscribe,
-    media.mediaState.localStream,
-    media.mediaState.noiseSuppression,
-    self,
-    publishNotes,
-  ])
+    // localStream is intentionally NOT a dependency here: its identity is stable
+    // across a call, and swapping the audio track (noise-suppression toggle) is
+    // handled by the re-tap effect below so the Whisper model isn't reloaded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transcriptionActive, canTranscribe, self, publishNotes])
+
+  // When the processed audio track is swapped (noise-suppression toggle), point
+  // the running transcriber at the new track without tearing down its worker —
+  // retap() no-ops if the track is unchanged (e.g. on first mount).
+  useEffect(() => {
+    const stream = media.mediaState.localStream
+    if (stream) transcriberRef.current?.retap(stream)
+  }, [media.mediaState.localStream, media.mediaState.noiseSuppression])
 
   // ---- Screen share -------------------------------------------------------
 

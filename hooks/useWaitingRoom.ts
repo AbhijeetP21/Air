@@ -31,6 +31,9 @@ export function useWaitingRoom({
 }) {
   const [enabled, setEnabled] = useState(initialEnabled)
   const [pending, setPending] = useState<JoinRequest[]>([])
+  // Users the host removed or denied (a 'denied' row). Surfaced so an accidental
+  // kick/deny isn't permanent — the host can re-admit (lift the ban).
+  const [banned, setBanned] = useState<JoinRequest[]>([])
   // Ids already announced via toast, so re-polls don't re-announce.
   const announcedRef = useRef<Set<string>>(new Set())
   const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null)
@@ -44,22 +47,28 @@ export function useWaitingRoom({
       .from('room_join_requests')
       .select('id, room_id, user_id, display_name, status, created_at')
       .eq('room_id', roomId)
-      .eq('status', 'pending')
+      .in('status', ['pending', 'denied'])
       .order('created_at', { ascending: true })
       .returns<JoinRequest[]>()
-    if (data) setPending(data)
+    if (data) {
+      setPending(data.filter((r) => r.status === 'pending'))
+      setBanned(data.filter((r) => r.status === 'denied'))
+    }
   }, [roomId])
 
-  // Poll the queue while hosting an active call with the waiting room on.
+  // Poll while hosting an active call. Not gated on the waiting-room toggle:
+  // kicks create 'denied' rows even with the waiting room off, and the host
+  // needs to see (and be able to re-admit) removed users either way.
   useEffect(() => {
-    if (!isHost || !active || !enabled) {
+    if (!isHost || !active) {
       setPending([])
+      setBanned([])
       return
     }
     void refresh()
     const timer = setInterval(() => void refresh(), QUEUE_POLL_MS)
     return () => clearInterval(timer)
-  }, [isHost, active, enabled, refresh])
+  }, [isHost, active, refresh])
 
   // Announce new arrivals once each.
   useEffect(() => {
@@ -111,6 +120,22 @@ export function useWaitingRoom({
     [resolve],
   )
 
+  /** Lift a ban: delete the denied row so the user may rejoin / ask again. */
+  const readmit = useCallback(
+    async (requestId: string) => {
+      setBanned((prev) => prev.filter((r) => r.id !== requestId))
+      const { error } = await supabase()
+        .from('room_join_requests')
+        .delete()
+        .eq('id', requestId)
+      if (error) {
+        toast.error("Couldn't re-admit that person. Try again.")
+        void refresh()
+      }
+    },
+    [refresh],
+  )
+
   /** Admit everyone currently waiting — one update, no per-person clicking. */
   const admitAll = useCallback(async () => {
     setPending([])
@@ -125,5 +150,5 @@ export function useWaitingRoom({
     }
   }, [roomId, refresh])
 
-  return { enabled, pending, setWaitingRoom, approve, deny, admitAll }
+  return { enabled, pending, banned, setWaitingRoom, approve, deny, admitAll, readmit }
 }

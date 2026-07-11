@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { MediaManager } from '@/lib/webrtc/MediaManager'
 import type { MediaState } from '@/types'
@@ -37,6 +37,28 @@ export function useMedia() {
   const [mediaState, setMediaState] = useState<MediaState>(INITIAL_STATE)
   const noiseRef = useRef(false)
   const blurRef = useRef(false)
+
+  // Keep the "flip camera" affordance honest as hardware comes and goes: a
+  // second camera plugged in mid-call should reveal the button, and its removal
+  // should hide it. The count is only reliable once camera permission has been
+  // granted (hasVideo), so we skip the refresh until then.
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.addEventListener) {
+      return
+    }
+    const onDeviceChange = async () => {
+      if (!manager.hasVideo()) return
+      const hasMultipleCameras = await manager.hasMultipleCameras()
+      setMediaState((prev) =>
+        prev.hasMultipleCameras === hasMultipleCameras
+          ? prev
+          : { ...prev, hasMultipleCameras },
+      )
+    }
+    navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
+    return () =>
+      navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange)
+  }, [manager])
 
   const acquireLocalStream = useCallback(async () => {
     const stream = await manager.acquireLocalStream(noiseRef.current)

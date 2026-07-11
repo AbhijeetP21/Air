@@ -692,6 +692,8 @@ function CallExperience({
         onApprove={(id) => void waiting.approve(id)}
         onDeny={(id) => void waiting.deny(id)}
         onAdmitAll={() => void waiting.admitAll()}
+        bannedRequests={waiting.banned}
+        onReadmit={(id) => void waiting.readmit(id)}
       />
     </div>
   )

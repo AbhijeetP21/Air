@@ -37,6 +37,7 @@ export class LocalTranscriber {
   private processor: ScriptProcessorNode | null = null
   private sink: GainNode | null = null
   private segmenter: SpeechSegmenter | null = null
+  private currentAudioTrack: MediaStreamTrack | null = null
   private nextJobId = 1
   private lastLine = ''
   private stopped = false
@@ -80,8 +81,29 @@ export class LocalTranscriber {
     })
     this.worker.postMessage({ type: 'load', model: opts.model ?? 'base' })
 
-    // Tap the mic. ScriptProcessor is legacy but universally supported and
-    // costs only a buffer copy per ~85ms; the heavy work lives in the worker.
+    this.tap(audioTrack)
+    rtcLog('Notes', 'local transcription started')
+  }
+
+  /**
+   * Re-point the capture graph at a new mic track (e.g. after a noise-
+   * suppression toggle swaps the processed audio track) WITHOUT tearing down
+   * the worker — the Whisper model stays loaded, so there's no re-download or
+   * multi-second stall. No-op when the track is unchanged or we've stopped.
+   */
+  retap(stream: MediaStream): void {
+    if (this.stopped || !this.worker) return
+    const audioTrack = stream.getAudioTracks()[0]
+    if (!audioTrack || audioTrack === this.currentAudioTrack) return
+    this.untap()
+    this.tap(audioTrack)
+    rtcLog('Notes', 'local transcription re-tapped mic')
+  }
+
+  /** Build the capture graph for one audio track. */
+  private tap(audioTrack: MediaStreamTrack): void {
+    // ScriptProcessor is legacy but universally supported and costs only a
+    // buffer copy per ~85ms; the heavy work lives in the worker.
     const audioContext = new AudioContext()
     this.audioContext = audioContext
     this.segmenter = new SpeechSegmenter({ sampleRate: audioContext.sampleRate })
@@ -104,7 +126,22 @@ export class LocalTranscriber {
     this.source.connect(this.processor)
     this.processor.connect(this.sink)
     this.sink.connect(audioContext.destination)
-    rtcLog('Notes', 'local transcription started')
+    this.currentAudioTrack = audioTrack
+  }
+
+  /** Tear down the capture graph (keeps the worker). */
+  private untap(): void {
+    this.processor?.disconnect()
+    this.source?.disconnect()
+    this.sink?.disconnect()
+    if (this.processor) this.processor.onaudioprocess = null
+    void this.audioContext?.close().catch(() => {})
+    this.audioContext = null
+    this.source = null
+    this.processor = null
+    this.sink = null
+    this.segmenter = null
+    this.currentAudioTrack = null
   }
 
   private transcribe(segment: Float32Array, sampleRate: number): void {
@@ -121,18 +158,9 @@ export class LocalTranscriber {
     this.stopped = true
     // Transcribe any utterance in progress before tearing down? No — the
     // worker is going away; a clean stop beats a half-line race.
-    this.processor?.disconnect()
-    this.source?.disconnect()
-    this.sink?.disconnect()
-    if (this.processor) this.processor.onaudioprocess = null
-    void this.audioContext?.close().catch(() => {})
+    this.untap()
     this.worker?.terminate()
     this.worker = null
-    this.audioContext = null
-    this.source = null
-    this.processor = null
-    this.sink = null
-    this.segmenter = null
     rtcLog('Notes', 'local transcription stopped')
   }
 }
