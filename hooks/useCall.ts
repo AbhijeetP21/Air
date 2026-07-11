@@ -810,6 +810,13 @@ export function useCall({
               router.push('/')
               return
             }
+            if (pollErr.code === 'room_full') {
+              // Approved, but the room filled before our poll landed — show the
+              // "room full" lobby, not the generic error.
+              setRoomFull(true)
+              setCallStatus('idle')
+              return
+            }
             throw pollErr
           }
         }
